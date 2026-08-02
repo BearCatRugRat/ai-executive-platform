@@ -1,0 +1,7 @@
+{
+  "id": "collector-intelligence",
+  "name": "Collector Intelligence Platform",
+  "status": "active-flagship",
+  "repositoryPath": "../collector-intelligence-engine",
+  "capabilities": ["assets", "evidence", "valuation", "digital-twin", "intelligence-graph", "knowledge-graph"]
+}

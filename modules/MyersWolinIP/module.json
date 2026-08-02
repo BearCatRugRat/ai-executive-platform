@@ -1,0 +1,7 @@
+{
+  "id": "myers-wolin-ip",
+  "name": "Myers Wolin IP Intelligence Platform",
+  "status": "planned",
+  "repositoryPath": "../myers-wolin-ip-intelligence",
+  "capabilities": ["clients", "matters", "patents", "office-actions", "appeals", "prior-art", "deadlines", "firm-knowledge"]
+}

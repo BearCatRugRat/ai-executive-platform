@@ -1,0 +1,7 @@
+{
+  "id": "prediction-intelligence",
+  "name": "Prediction Intelligence Platform",
+  "status": "planned",
+  "repositoryPath": "../prediction-intelligence-platform",
+  "capabilities": ["lottery", "prediction-markets", "forecasting", "simulation", "backtesting"]
+}
