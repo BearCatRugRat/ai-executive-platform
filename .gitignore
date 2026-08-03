@@ -1,0 +1,14 @@
+# Visual Studio / .NET build output
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# OS cruft
+.DS_Store
+Thumbs.db
