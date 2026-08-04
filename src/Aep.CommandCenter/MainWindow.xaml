@@ -10,12 +10,15 @@
       <Grid.ColumnDefinitions>
         <ColumnDefinition/>
         <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
       <StackPanel>
         <TextBlock Text="AI Executive Platform" FontSize="30" FontWeight="Bold"/>
         <TextBlock Text="Executive Command Center" FontSize="16" Foreground="#9FB3C8"/>
       </StackPanel>
-      <Button Grid.Column="1" Content="Reload" Padding="16,8" VerticalAlignment="Center" Command="{Binding ReloadCommand}"/>
+      <Button Grid.Column="1" Content="Catch Me Up" Padding="16,8" Margin="0,0,10,0" VerticalAlignment="Center"
+              Background="#2F6FED" Foreground="White" BorderThickness="0" Command="{Binding CatchMeUpCommand}"/>
+      <Button Grid.Column="2" Content="Reload" Padding="16,8" VerticalAlignment="Center" Command="{Binding ReloadCommand}"/>
     </Grid>
 
     <Border Grid.Row="1" Margin="0,18,0,18" Padding="18" Background="#142033" CornerRadius="10">

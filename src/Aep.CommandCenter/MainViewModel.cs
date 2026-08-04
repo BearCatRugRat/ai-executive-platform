@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows.Input;
 using Aep.Core;
 using Aep.PlatformServices.Governance;
@@ -23,6 +24,7 @@ public sealed class MainViewModel : ObservableObject
     {
         _governanceClient = governanceClient;
         ReloadCommand = new RelayCommand(LoadAsync);
+        CatchMeUpCommand = new RelayCommand(CatchMeUpAsync);
     }
 
     public ObservableCollection<GovernanceProjectDto> DomainApplications { get; } = [];
@@ -43,6 +45,7 @@ public sealed class MainViewModel : ObservableObject
     }
 
     public ICommand ReloadCommand { get; }
+    public ICommand CatchMeUpCommand { get; }
 
     public async Task LoadAsync()
     {
@@ -96,5 +99,29 @@ public sealed class MainViewModel : ObservableObject
         {
             IsLoading = false;
         }
+    }
+
+    /// <summary>
+    /// Opens a new Claude Cowork session with the "catch me up" prompt prefilled,
+    /// via Claude Desktop's claude:// deep link (see support.claude.com's "Open
+    /// Claude Desktop with a link"). Cowork attaches C:\Development so Claude has
+    /// immediate access to both repos and the daily-briefs folder, then the
+    /// brian-catchup skill takes it from there.
+    /// </summary>
+    public Task CatchMeUpAsync()
+    {
+        const string url = "claude://cowork/new?q=catch%20me%20up&folder=C%3A%5CDevelopment";
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            StatusMessage = "Opening Claude Cowork - catching up now. Claude Desktop will ask you to " +
+                             "confirm the C:\\Development folder attachment.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not open Claude Desktop ({ex.Message}). Is it installed?";
+        }
+
+        return Task.CompletedTask;
     }
 }
