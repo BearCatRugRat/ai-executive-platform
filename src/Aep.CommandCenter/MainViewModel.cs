@@ -24,7 +24,7 @@ public sealed class MainViewModel : ObservableObject
     {
         _governanceClient = governanceClient;
         ReloadCommand = new RelayCommand(LoadAsync);
-        CatchMeUpCommand = new RelayCommand(CatchMeUpAsync);
+        DevCatchUpCommand = new RelayCommand(DevCatchUpAsync);
     }
 
     public ObservableCollection<GovernanceProjectDto> DomainApplications { get; } = [];
@@ -45,7 +45,7 @@ public sealed class MainViewModel : ObservableObject
     }
 
     public ICommand ReloadCommand { get; }
-    public ICommand CatchMeUpCommand { get; }
+    public ICommand DevCatchUpCommand { get; }
 
     public async Task LoadAsync()
     {
@@ -102,20 +102,25 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Opens a new Claude Cowork session with the "catch me up" prompt prefilled,
-    /// via Claude Desktop's claude:// deep link (see support.claude.com's "Open
-    /// Claude Desktop with a link"). Cowork attaches C:\Development so Claude has
-    /// immediate access to both repos and the daily-briefs folder, then the
-    /// brian-catchup skill takes it from there.
+    /// Opens a new Claude Code session (not Cowork - this button is specifically
+    /// for dev-context catch-up on active software work, e.g. Myers Wolin AI,
+    /// collector-intelligence-engine, ai-executive-platform) via Claude Desktop's
+    /// claude:// deep link (see support.claude.com's "Open Claude Desktop with a
+    /// link"). Code sessions get real local shell/file access rather than a
+    /// sandbox, so Claude can actually check git/docker/build state instead of
+    /// just reading files. The prompt points at DEV_CATCHUP.md rather than
+    /// embedding the full procedure in the URL, so the checklist stays editable
+    /// without touching this code.
     /// </summary>
-    public Task CatchMeUpAsync()
+    public Task DevCatchUpAsync()
     {
-        const string url = "claude://cowork/new?q=catch%20me%20up&folder=C%3A%5CDevelopment";
+        const string url = "claude://code/new?q=Read%20C%3A%5CDevelopment%5CDEV_CATCHUP.md%20and%20run%20" +
+                            "the%20Dev%20Catch-Up%20procedure%20it%20describes.&folder=C%3A%5CDevelopment";
         try
         {
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            StatusMessage = "Opening Claude Cowork - catching up now. Claude Desktop will ask you to " +
-                             "confirm the C:\\Development folder attachment.";
+            StatusMessage = "Opening a Claude Code session on C:\\Development for a dev catch-up. Claude " +
+                             "Desktop will ask you to confirm the folder attachment.";
         }
         catch (Exception ex)
         {

@@ -16,8 +16,9 @@
         <TextBlock Text="AI Executive Platform" FontSize="30" FontWeight="Bold"/>
         <TextBlock Text="Executive Command Center" FontSize="16" Foreground="#9FB3C8"/>
       </StackPanel>
-      <Button Grid.Column="1" Content="Catch Me Up" Padding="16,8" Margin="0,0,10,0" VerticalAlignment="Center"
-              Background="#2F6FED" Foreground="White" BorderThickness="0" Command="{Binding CatchMeUpCommand}"/>
+      <Button Grid.Column="1" Content="Dev Catch-Up" Padding="16,8" Margin="0,0,10,0" VerticalAlignment="Center"
+              Background="#2F6FED" Foreground="White" BorderThickness="0" Command="{Binding DevCatchUpCommand}"
+              ToolTip="Opens a Claude Code session on C:\Development with full context on active code work"/>
       <Button Grid.Column="2" Content="Reload" Padding="16,8" VerticalAlignment="Center" Command="{Binding ReloadCommand}"/>
     </Grid>
 
