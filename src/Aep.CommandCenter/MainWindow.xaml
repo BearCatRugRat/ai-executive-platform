@@ -18,7 +18,7 @@
       </StackPanel>
       <Button Grid.Column="1" Content="Dev Catch-Up" Padding="16,8" Margin="0,0,10,0" VerticalAlignment="Center"
               Background="#2F6FED" Foreground="White" BorderThickness="0" Command="{Binding DevCatchUpCommand}"
-              ToolTip="Opens a Claude Code session on C:\Development with full context on active code work"/>
+              ToolTip="Opens a Claude Code session on C:\Development with the catch-up prompt pre-filled - press Enter in the new window to actually start it (Claude Desktop never auto-sends a deep-linked prompt)"/>
       <Button Grid.Column="2" Content="Reload" Padding="16,8" VerticalAlignment="Center" Command="{Binding ReloadCommand}"/>
     </Grid>
 

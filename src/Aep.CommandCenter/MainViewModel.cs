@@ -119,8 +119,9 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            StatusMessage = "Opening a Claude Code session on C:\\Development for a dev catch-up. Claude " +
-                             "Desktop will ask you to confirm the folder attachment.";
+            StatusMessage = "Opening a Claude Code session on C:\\Development - the catch-up prompt will be " +
+                             "pre-filled in the new window, but you need to press Enter there to send it " +
+                             "(Claude Desktop deep links never auto-send, by design).";
         }
         catch (Exception ex)
         {
