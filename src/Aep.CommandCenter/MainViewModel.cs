@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
 using System.Windows.Input;
 using Aep.Core;
 using Aep.PlatformServices.Governance;
@@ -20,11 +21,20 @@ public sealed class MainViewModel : ObservableObject
     private bool _isLoading;
     private string _statusMessage = "Loading governance data...";
 
+    // Statuses that mean "don't render this card" - e.g. a GovernanceProject
+    // row consolidated into another one by a governance cleanup (see
+    // scripts/sync_governance.py in collector-intelligence-engine) rather
+    // than deleted outright, so the history stays queryable via the API
+    // without cluttering the daily-use console with a duplicate/dead card.
+    private static readonly string[] HiddenStatuses = ["Superseded", "Archived", "Retired"];
+
     public MainViewModel(GovernanceClient governanceClient)
     {
         _governanceClient = governanceClient;
         ReloadCommand = new RelayCommand(LoadAsync);
         DevCatchUpCommand = new RelayCommand(DevCatchUpAsync);
+        OpenProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-open.ps1", "Open"));
+        DevelopProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-dev.ps1", "Develop"));
     }
 
     public ObservableCollection<GovernanceProjectDto> DomainApplications { get; } = [];
@@ -46,6 +56,8 @@ public sealed class MainViewModel : ObservableObject
 
     public ICommand ReloadCommand { get; }
     public ICommand DevCatchUpCommand { get; }
+    public ICommand OpenProjectCommand { get; }
+    public ICommand DevelopProjectCommand { get; }
 
     public async Task LoadAsync()
     {
@@ -60,7 +72,9 @@ public sealed class MainViewModel : ObservableObject
             SoftwareProjects.Clear();
             OpenActions.Clear();
 
-            foreach (var project in briefing.GovernanceProjects.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+            foreach (var project in briefing.GovernanceProjects
+                         .Where(p => !HiddenStatuses.Contains(p.Status, StringComparer.OrdinalIgnoreCase))
+                         .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
             {
                 if (project.Tier == GovernanceTiers.DomainApplication)
                 {
@@ -126,6 +140,56 @@ public sealed class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"Could not open Claude Desktop ({ex.Message}). Is it installed?";
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Backs both OpenProjectCommand and DevelopProjectCommand. Each
+    /// project's own repo owns its launch logic (launch-open.ps1 /
+    /// launch-dev.ps1 at the repo root) rather than this shell duplicating
+    /// docker/npm/claude-deep-link details per project - this method just
+    /// finds and runs the right script. A project with no RepoPath (most
+    /// Command Center Areas - button + status only, no dedicated repo) has
+    /// nothing to launch, which is expected, not an error.
+    /// </summary>
+    private Task LaunchAsync(GovernanceProjectDto project, string scriptName, string actionLabel)
+    {
+        if (!project.HasRepoPath)
+        {
+            StatusMessage = $"{project.Name} has no repo linked - nothing to {actionLabel.ToLowerInvariant()}.";
+            return Task.CompletedTask;
+        }
+
+        var scriptPath = Path.Combine(project.RepoPath!, scriptName);
+        if (!File.Exists(scriptPath))
+        {
+            StatusMessage = $"{actionLabel} script not found for {project.Name}: {scriptPath}";
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            var psi = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-File");
+            psi.ArgumentList.Add(scriptPath);
+            Process.Start(psi);
+
+            StatusMessage = $"{actionLabel}ing {project.Name}... " +
+                             "(the launch script may pop its own window - e.g. a dev server terminal " +
+                             "or a Claude Code session - give it a few seconds)";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not {actionLabel.ToLowerInvariant()} {project.Name}: {ex.Message}";
         }
 
         return Task.CompletedTask;

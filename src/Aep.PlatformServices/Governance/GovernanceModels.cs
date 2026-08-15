@@ -39,6 +39,7 @@ public sealed record GovernanceProjectDto(
     string? Domain,
     string? Tier,
     string? DropboxPath,
+    string? RepoPath,
     string Status,
     string? Priority,
     string? NextAction,
@@ -48,7 +49,16 @@ public sealed record GovernanceProjectDto(
     string? Risk,
     string? LastReview,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    /// <summary>
+    /// True when this domain has a real repo behind it (RepoPath set), so
+    /// the Command Center can offer Open/Develop buttons. False for
+    /// Command Center Areas with no dedicated repo (button + status only,
+    /// per ADR 0003 addendum) - not every card is launchable, by design.
+    /// </summary>
+    public bool HasRepoPath => !string.IsNullOrWhiteSpace(RepoPath);
+}
 
 public sealed record ActionDto(
     int Id,
