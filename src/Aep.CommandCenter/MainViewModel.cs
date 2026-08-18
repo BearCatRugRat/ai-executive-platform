@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Aep.Core;
 using Aep.PlatformServices.Governance;
 
@@ -17,9 +18,17 @@ namespace Aep.CommandCenter;
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
+    // How often to retry on its own while the governance API is unreachable -
+    // e.g. Docker Desktop restarting after an outage (see 2026-08-18) - so the
+    // console recovers by itself instead of requiring Brian to remember to
+    // click Reload once the API's actually back.
+    private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
+
     private readonly GovernanceClient _governanceClient;
+    private readonly DispatcherTimer _retryTimer;
     private bool _isLoading;
     private string _statusMessage = "Loading governance data...";
+    private DateTimeOffset? _lastSuccessfulLoadAt;
 
     // Statuses that mean "don't render this card" - e.g. a GovernanceProject
     // row consolidated into another one by a governance cleanup (see
@@ -35,6 +44,15 @@ public sealed class MainViewModel : ObservableObject
         DevCatchUpCommand = new RelayCommand(DevCatchUpAsync);
         OpenProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-open.ps1", "Open"));
         DevelopProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-dev.ps1", "Develop"));
+
+        _retryTimer = new DispatcherTimer { Interval = RetryInterval };
+        _retryTimer.Tick += async (_, _) =>
+        {
+            if (!IsLoading)
+            {
+                await LoadAsync();
+            }
+        };
     }
 
     public ObservableCollection<GovernanceProjectDto> DomainApplications { get; } = [];
@@ -66,52 +84,85 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             var briefing = await _governanceClient.GetBriefingAsync();
-
-            DomainApplications.Clear();
-            CommandCenterAreas.Clear();
-            SoftwareProjects.Clear();
-            OpenActions.Clear();
-
-            foreach (var project in briefing.GovernanceProjects
-                         .Where(p => !HiddenStatuses.Contains(p.Status, StringComparer.OrdinalIgnoreCase))
-                         .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                if (project.Tier == GovernanceTiers.DomainApplication)
-                {
-                    DomainApplications.Add(project);
-                }
-                else
-                {
-                    // Anything not explicitly tagged "Domain Application" - including
-                    // an untagged/unclassified row - renders as a Command Center Area.
-                    // That's the safer default: an unclassified row should still show
-                    // up somewhere rather than silently vanish from the console.
-                    CommandCenterAreas.Add(project);
-                }
-            }
-
-            foreach (var project in briefing.SoftwareProjects.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                SoftwareProjects.Add(project);
-            }
-
-            foreach (var action in briefing.OpenActions)
-            {
-                OpenActions.Add(action);
-            }
+            Populate(briefing);
+            _lastSuccessfulLoadAt = DateTimeOffset.Now;
+            _retryTimer.Stop();
 
             StatusMessage = $"Updated {DateTime.Now:t} - {DomainApplications.Count} domain application(s), " +
                              $"{CommandCenterAreas.Count} command center area(s), {SoftwareProjects.Count} software " +
                              $"project(s), {OpenActions.Count} open action(s).";
+
+            // Fire-and-forget: caching is best-effort and must never delay or
+            // fail a load that already succeeded (see BriefingCache).
+            _ = BriefingCache.SaveAsync(briefing);
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Could not reach the governance API at {GovernanceClient.DefaultBaseAddress} - " +
-                             $"is the collector-intelligence-engine Docker stack running? ({ex.Message})";
+            var apiError = $"Could not reach the governance API at {GovernanceClient.DefaultBaseAddress} - " +
+                            $"is the collector-intelligence-engine Docker stack running? ({ex.Message})";
+
+            if (_lastSuccessfulLoadAt is { } lastLoad)
+            {
+                // Already showing real data from earlier this session (Populate
+                // is never called on failure, so it's still on screen) - just
+                // make clear it's aging, don't manufacture a scarier "nothing
+                // works" message than what's actually true.
+                StatusMessage = $"{apiError} Still showing data as of {lastLoad:t}.";
+            }
+            else if (BriefingCache.TryLoad() is { } cached)
+            {
+                // Cold start during an outage (e.g. Docker Desktop itself failing
+                // to start, 2026-08-18) - show the last known-good briefing
+                // instead of a blank console, clearly labeled as stale.
+                Populate(cached.Briefing);
+                StatusMessage = $"{apiError} Showing cached data from {cached.FetchedAt:g} - may be out of date.";
+            }
+            else
+            {
+                StatusMessage = apiError;
+            }
+
+            _retryTimer.Start();
         }
         finally
         {
             IsLoading = false;
+        }
+    }
+
+    private void Populate(ExecutiveBriefingDto briefing)
+    {
+        DomainApplications.Clear();
+        CommandCenterAreas.Clear();
+        SoftwareProjects.Clear();
+        OpenActions.Clear();
+
+        foreach (var project in briefing.GovernanceProjects
+                     .Where(p => !HiddenStatuses.Contains(p.Status, StringComparer.OrdinalIgnoreCase))
+                     .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            if (project.Tier == GovernanceTiers.DomainApplication)
+            {
+                DomainApplications.Add(project);
+            }
+            else
+            {
+                // Anything not explicitly tagged "Domain Application" - including
+                // an untagged/unclassified row - renders as a Command Center Area.
+                // That's the safer default: an unclassified row should still show
+                // up somewhere rather than silently vanish from the console.
+                CommandCenterAreas.Add(project);
+            }
+        }
+
+        foreach (var project in briefing.SoftwareProjects.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            SoftwareProjects.Add(project);
+        }
+
+        foreach (var action in briefing.OpenActions)
+        {
+            OpenActions.Add(action);
         }
     }
 
