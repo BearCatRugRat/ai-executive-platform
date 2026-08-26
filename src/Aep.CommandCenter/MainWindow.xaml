@@ -3,6 +3,7 @@
     <BooleanToVisibilityConverter x:Key="BoolToVis"/>
     <local:SeverityToBrushConverter x:Key="SeverityToBrush"/>
     <local:NullOrEmptyToVisibilityConverter x:Key="NullOrEmptyToVis"/>
+    <local:NotNullToVisibilityConverter x:Key="NotNullToVis"/>
   </Window.Resources>
   <Grid Margin="24">
     <Grid.RowDefinitions>
@@ -15,8 +16,6 @@
       <Grid.ColumnDefinitions>
         <ColumnDefinition/>
         <ColumnDefinition Width="Auto"/>
-        <ColumnDefinition Width="Auto"/>
-        <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
       <StackPanel Orientation="Horizontal">
         <StackPanel>
@@ -25,16 +24,10 @@
         </StackPanel>
         <Button Content="?" Width="28" Height="28" Margin="12,0,0,0" Padding="0" FontWeight="Bold"
                 Background="#2A3A55" Foreground="White" BorderThickness="0" VerticalAlignment="Top"
-                ToolTip="What is this console? Click for an overview of every section."
+                ToolTip="What is this console? Click for an overview."
                 Command="{Binding ShowHelpCommand}" CommandParameter="overview"/>
       </StackPanel>
-      <Button Grid.Column="1" Content="Dev Catch-Up" Padding="16,8" Margin="0,0,10,0" VerticalAlignment="Center"
-              Background="#2F6FED" Foreground="White" BorderThickness="0" Command="{Binding DevCatchUpCommand}"
-              ToolTip="Opens a Claude Code session on C:\Development with the catch-up prompt pre-filled - press Enter in the new window to actually start it (Claude Desktop never auto-sends a deep-linked prompt)"/>
-      <Button Grid.Column="2" Content="Cowork Catch-Up" Padding="16,8" Margin="0,0,10,0" VerticalAlignment="Center"
-              Background="#2F9E6F" Foreground="White" BorderThickness="0" Command="{Binding CoworkCatchUpCommand}"
-              ToolTip="Opens a Claude Cowork session with both repos attached, pre-filled to run the brian-catchup skill - press Enter in the new window to send it"/>
-      <Button Grid.Column="3" Content="Reload" Padding="16,8" Margin="0,0,10,0" VerticalAlignment="Center" Command="{Binding ReloadCommand}"/>
+      <Button Grid.Column="1" Content="Reload" Padding="16,8" VerticalAlignment="Center" Command="{Binding ReloadCommand}"/>
     </Grid>
 
     <Border Grid.Row="1" Margin="0,18,0,18" Padding="18" Background="#142033" CornerRadius="10">
@@ -44,147 +37,125 @@
     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
       <StackPanel>
 
+        <!-- Row 1: start the day - not part of the domain tree, always available -->
+        <TextBlock Text="Start the day" FontSize="14" FontWeight="SemiBold" Foreground="#9FB3C8" Margin="0,0,0,10"/>
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+          <Button Padding="16,10" Margin="0,0,14,0" Background="#2F6FED" Foreground="White" BorderThickness="0"
+                  Command="{Binding DevCatchUpCommand}"
+                  ToolTip="Opens a Claude Code session on C:\Development with the catch-up prompt pre-filled - press Enter in the new window to actually start it (Claude Desktop never auto-sends a deep-linked prompt)">
+            <StackPanel>
+              <TextBlock Text="Dev Catch-Up" FontSize="14" FontWeight="Bold"/>
+              <TextBlock Text="Claude Code session, scoped to C:\Development" FontSize="11" Opacity="0.85"/>
+            </StackPanel>
+          </Button>
+          <Button Padding="16,10" Background="#2F9E6F" Foreground="White" BorderThickness="0"
+                  Command="{Binding CoworkCatchUpCommand}"
+                  ToolTip="Opens a Claude Cowork session with both repos attached, pre-filled to run the brian-catchup skill - press Enter in the new window to send it">
+            <StackPanel>
+              <TextBlock Text="Cowork Catch-Up" FontSize="14" FontWeight="Bold"/>
+              <TextBlock Text="Claude Cowork session, both governance repos attached" FontSize="11" Opacity="0.85"/>
+            </StackPanel>
+          </Button>
+        </StackPanel>
+
+        <!-- Row 2+: the domain tree - one level visible at a time -->
         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-          <TextBlock Text="Module Status" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <Button Content="?" Width="20" Height="20" Margin="8,0,0,0" Padding="0" FontSize="11" FontWeight="Bold"
-                  Background="#2A3A55" Foreground="White" BorderThickness="0" VerticalAlignment="Center"
-                  Command="{Binding ShowHelpCommand}" CommandParameter="module-status"/>
+          <Button Content="&lt; Back" Padding="10,4" Margin="0,0,10,0" FontSize="12" Background="#2A3A55" Foreground="White"
+                  BorderThickness="0" IsEnabled="{Binding CanGoBack}" Command="{Binding GoBackCommand}"/>
+          <TextBlock Text="{Binding BreadcrumbText}" FontSize="13" Foreground="#9FB3C8" VerticalAlignment="Center"/>
         </StackPanel>
-        <TextBlock Text="Live from each domain app's own API - not the governance log." FontSize="11"
-                    Foreground="#6B7A90" Margin="0,-6,0,10"/>
-        <ItemsControl ItemsSource="{Binding ModuleStatuses}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <StackPanel Margin="0,0,0,16">
-                <TextBlock Text="{Binding DisplayName}" FontSize="13" FontWeight="SemiBold" Foreground="#9FB3C8" Margin="0,0,0,8"/>
-                <ItemsControl ItemsSource="{Binding Cards}">
-                  <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
-                  </ItemsControl.ItemsPanel>
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <Border Width="300" Margin="0,0,14,14" Padding="16" Background="#1B2A44" CornerRadius="10"
-                              BorderThickness="0,0,0,4" BorderBrush="{Binding Severity, Converter={StaticResource SeverityToBrush}}">
-                        <StackPanel>
-                          <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="Bold"/>
-                          <TextBlock Text="{Binding Headline}" FontSize="13" Foreground="#C5D2E0" Margin="0,6,0,0" TextWrapping="Wrap"/>
-                          <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="#8FA0B8" Margin="0,6,0,0" TextWrapping="Wrap"
-                                      Visibility="{Binding Detail, Converter={StaticResource NullOrEmptyToVis}}"/>
-                          <Button Content="Go deeper" Padding="12,5" Margin="0,12,0,0" HorizontalAlignment="Left" FontSize="11"
-                                  Background="#3A4A66" Foreground="White" BorderThickness="0"
-                                  ToolTip="Opens a Claude session pre-scoped to this card's topic"
-                                  Command="{Binding DataContext.LaunchModuleCardCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                  CommandParameter="{Binding}"/>
-                        </StackPanel>
-                      </Border>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
+
+        <!-- The currently-open node's own card, if it has any content of its own -->
+        <Border Margin="0,0,0,16" Padding="16" Background="#16223A" CornerRadius="10"
+                Visibility="{Binding CurrentNode, Converter={StaticResource NotNullToVis}}">
+          <StackPanel DataContext="{Binding CurrentNode}">
+            <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="Bold"/>
+
+            <StackPanel Visibility="{Binding GovernanceProject, Converter={StaticResource NotNullToVis}}" Margin="0,8,0,0">
+              <TextBlock Text="{Binding GovernanceProject.Status}" FontSize="12" Foreground="#7FD1AE"/>
+              <TextBlock Text="{Binding GovernanceProject.NextAction}" FontSize="12" Foreground="#9FB3C8" Margin="0,4,0,0" TextWrapping="Wrap"/>
+              <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
+                          Visibility="{Binding GovernanceProject.HasRepoPath, Converter={StaticResource BoolToVis}}">
+                <Button Content="Open" Padding="14,6" Margin="0,0,8,0" Background="#2F6FED" Foreground="White" BorderThickness="0"
+                        Command="{Binding DataContext.OpenProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                        CommandParameter="{Binding GovernanceProject}"/>
+                <Button Content="Develop" Padding="14,6" Background="#3A4A66" Foreground="White" BorderThickness="0"
+                        Command="{Binding DataContext.DevelopProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                        CommandParameter="{Binding GovernanceProject}"/>
               </StackPanel>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
+            </StackPanel>
+          </StackPanel>
+        </Border>
 
-        <StackPanel Orientation="Horizontal" Margin="0,20,0,10">
-          <TextBlock Text="Domain Applications" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <Button Content="?" Width="20" Height="20" Margin="8,0,0,0" Padding="0" FontSize="11" FontWeight="Bold"
-                  Background="#2A3A55" Foreground="White" BorderThickness="0" VerticalAlignment="Center"
-                  Command="{Binding ShowHelpCommand}" CommandParameter="domain-applications"/>
-        </StackPanel>
-        <ItemsControl ItemsSource="{Binding DomainApplications}">
+        <ItemsControl ItemsSource="{Binding VisibleNodes}">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Border Width="280" Margin="0,0,14,14" Padding="16" Background="#1B2A44" CornerRadius="10">
+              <Border Width="300" Margin="0,0,14,14" Padding="16" Background="#1B2A44" CornerRadius="10">
                 <StackPanel>
-                  <TextBlock Text="{Binding Name}" FontSize="17" FontWeight="Bold" TextWrapping="Wrap"/>
-                  <TextBlock Text="{Binding Status}" FontSize="12" Foreground="#7FD1AE" Margin="0,4,0,0"/>
-                  <TextBlock Text="{Binding NextAction}" FontSize="12" Foreground="#9FB3C8" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                  <StackPanel Orientation="Horizontal" Margin="0,12,0,0"
-                              Visibility="{Binding HasRepoPath, Converter={StaticResource BoolToVis}}">
-                    <Button Content="Open" Padding="14,6" Margin="0,0,8,0" Background="#2F6FED" Foreground="White" BorderThickness="0"
-                            ToolTip="Use this app - opens it for real work, not development"
-                            Command="{Binding DataContext.OpenProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                            CommandParameter="{Binding}"/>
-                    <Button Content="Develop" Padding="14,6" Background="#3A4A66" Foreground="White" BorderThickness="0"
-                            ToolTip="Work on the code - opens a Claude Code session scoped to this repo"
-                            Command="{Binding DataContext.DevelopProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                            CommandParameter="{Binding}"/>
+                  <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="Bold" TextWrapping="Wrap"/>
+
+                  <StackPanel Visibility="{Binding GovernanceProject, Converter={StaticResource NotNullToVis}}" Margin="0,8,0,0">
+                    <TextBlock Text="{Binding GovernanceProject.Status}" FontSize="12" Foreground="#7FD1AE"/>
+                    <TextBlock Text="{Binding GovernanceProject.NextAction}" FontSize="12" Foreground="#9FB3C8" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
+                                Visibility="{Binding GovernanceProject.HasRepoPath, Converter={StaticResource BoolToVis}}">
+                      <Button Content="Open" Padding="14,6" Margin="0,0,8,0" Background="#2F6FED" Foreground="White" BorderThickness="0"
+                              Command="{Binding DataContext.OpenProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                              CommandParameter="{Binding GovernanceProject}"/>
+                      <Button Content="Develop" Padding="14,6" Background="#3A4A66" Foreground="White" BorderThickness="0"
+                              Command="{Binding DataContext.DevelopProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                              CommandParameter="{Binding GovernanceProject}"/>
+                    </StackPanel>
                   </StackPanel>
-                </StackPanel>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
 
-        <StackPanel Orientation="Horizontal" Margin="0,20,0,10">
-          <TextBlock Text="Command Center Areas" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <Button Content="?" Width="20" Height="20" Margin="8,0,0,0" Padding="0" FontSize="11" FontWeight="Bold"
-                  Background="#2A3A55" Foreground="White" BorderThickness="0" VerticalAlignment="Center"
-                  Command="{Binding ShowHelpCommand}" CommandParameter="command-center-areas"/>
-        </StackPanel>
-        <ItemsControl ItemsSource="{Binding CommandCenterAreas}">
-          <ItemsControl.ItemsPanel>
-            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
-          </ItemsControl.ItemsPanel>
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Width="230" Margin="0,0,12,12" Padding="14" Background="#16223A" CornerRadius="10">
-                <StackPanel>
-                  <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                  <TextBlock Text="{Binding Status}" FontSize="11" Foreground="#9FB3C8" Margin="0,4,0,0"/>
-                  <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
-                              Visibility="{Binding HasRepoPath, Converter={StaticResource BoolToVis}}">
-                    <Button Content="Open" Padding="10,4" Margin="0,0,6,0" FontSize="11" Background="#2F6FED" Foreground="White" BorderThickness="0"
-                            Command="{Binding DataContext.OpenProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                            CommandParameter="{Binding}"/>
-                    <Button Content="Develop" Padding="10,4" FontSize="11" Background="#3A4A66" Foreground="White" BorderThickness="0"
-                            Command="{Binding DataContext.DevelopProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                            CommandParameter="{Binding}"/>
+                  <StackPanel Visibility="{Binding SoftwareProject, Converter={StaticResource NotNullToVis}}" Margin="0,8,0,0">
+                    <TextBlock Text="{Binding SoftwareProject.Status}" FontSize="12" Foreground="#7FD1AE"/>
+                    <TextBlock Text="{Binding SoftwareProject.CurrentPhase}" FontSize="12" Foreground="#C5D2E0" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding SoftwareProject.NextAction}" FontSize="12" Foreground="#9FB3C8" Margin="0,4,0,0" TextWrapping="Wrap"/>
                   </StackPanel>
-                </StackPanel>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
 
-        <StackPanel Orientation="Horizontal" Margin="0,20,0,10">
-          <TextBlock Text="Software Projects" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <Button Content="?" Width="20" Height="20" Margin="8,0,0,0" Padding="0" FontSize="11" FontWeight="Bold"
-                  Background="#2A3A55" Foreground="White" BorderThickness="0" VerticalAlignment="Center"
-                  Command="{Binding ShowHelpCommand}" CommandParameter="software-projects"/>
-        </StackPanel>
-        <ItemsControl ItemsSource="{Binding SoftwareProjects}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Margin="0,0,0,8" Padding="12" Background="#111A2C" CornerRadius="8">
-                <StackPanel Orientation="Horizontal">
-                  <TextBlock Text="{Binding Name}" FontWeight="Bold" Width="220" TextWrapping="Wrap"/>
-                  <TextBlock Text="{Binding Status}" Width="90" Foreground="#7FD1AE"/>
-                  <TextBlock Text="{Binding CurrentPhase}" Width="280" Foreground="#C5D2E0" TextWrapping="Wrap"/>
-                  <TextBlock Text="{Binding NextAction}" Foreground="#9FB3C8" TextWrapping="Wrap"/>
-                </StackPanel>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
+                  <Border Visibility="{Binding ModuleCard, Converter={StaticResource NotNullToVis}}" Margin="0,8,0,0" Padding="10,8"
+                          Background="#16223A" CornerRadius="6" BorderThickness="0,0,0,4"
+                          BorderBrush="{Binding ModuleCard.Severity, Converter={StaticResource SeverityToBrush}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding ModuleCard.Headline}" FontSize="13" Foreground="#C5D2E0" TextWrapping="Wrap"/>
+                      <TextBlock Text="{Binding ModuleCard.Detail}" FontSize="11" Foreground="#8FA0B8" Margin="0,4,0,0" TextWrapping="Wrap"
+                                 Visibility="{Binding ModuleCard.Detail, Converter={StaticResource NullOrEmptyToVis}}"/>
+                      <Button Content="Go deeper" Padding="10,4" Margin="0,8,0,0" HorizontalAlignment="Left" FontSize="11"
+                              Background="#3A4A66" Foreground="White" BorderThickness="0"
+                              ToolTip="Opens a Claude session pre-scoped to this card's topic"
+                              Command="{Binding DataContext.LaunchModuleCardCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                              CommandParameter="{Binding ModuleCard}"/>
+                    </StackPanel>
+                  </Border>
 
-        <StackPanel Orientation="Horizontal" Margin="0,20,0,10">
-          <TextBlock Text="Open Actions" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <Button Content="?" Width="20" Height="20" Margin="8,0,0,0" Padding="0" FontSize="11" FontWeight="Bold"
-                  Background="#2A3A55" Foreground="White" BorderThickness="0" VerticalAlignment="Center"
-                  Command="{Binding ShowHelpCommand}" CommandParameter="open-actions"/>
-        </StackPanel>
-        <ItemsControl ItemsSource="{Binding OpenActions}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Margin="0,0,0,6" Padding="10" Background="#111A2C" CornerRadius="8">
-                <StackPanel Orientation="Horizontal">
-                  <TextBlock Text="{Binding Priority}" Width="70" Foreground="#E0A458" FontWeight="Bold"/>
-                  <TextBlock Text="{Binding Action}" Foreground="#C5D2E0" TextWrapping="Wrap" Width="820"/>
-                  <TextBlock Text="{Binding Owner}" Foreground="#9FB3C8" Margin="12,0,0,0"/>
+                  <TextBlock Text="Module unreachable - is its Docker stack running?" FontSize="12" Foreground="#E05858"
+                             Margin="0,8,0,0" TextWrapping="Wrap"
+                             Visibility="{Binding ModuleUnreachable, Converter={StaticResource BoolToVis}}"/>
+
+                  <ItemsControl ItemsSource="{Binding RelatedActions}" Margin="0,6,0,0">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock FontSize="11" Foreground="#C5D2E0" TextWrapping="Wrap" Margin="0,2,0,0">
+                          <Run Text="{Binding Priority}" FontWeight="Bold" Foreground="#E0A458"/>
+                          <Run Text=" - "/>
+                          <Run Text="{Binding Action}"/>
+                        </TextBlock>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <TextBlock Text="{Binding Node.StubText}" FontSize="12" Foreground="#6B7A90" Margin="0,8,0,0" TextWrapping="Wrap"
+                             Visibility="{Binding IsStub, Converter={StaticResource BoolToVis}}"/>
+
+                  <Button Content="View contents -&gt;" Padding="14,6" Margin="0,12,0,0" HorizontalAlignment="Left"
+                          Background="#2F6FED" Foreground="White" BorderThickness="0"
+                          Visibility="{Binding HasChildren, Converter={StaticResource BoolToVis}}"
+                          Command="{Binding DataContext.SelectNodeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                          CommandParameter="{Binding}"/>
                 </StackPanel>
               </Border>
             </DataTemplate>

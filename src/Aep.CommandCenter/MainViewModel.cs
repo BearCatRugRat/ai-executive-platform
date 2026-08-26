@@ -6,18 +6,50 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using Aep.Core;
 using Aep.ModuleContracts;
+using Aep.PlatformServices.CommandCenterRegistry;
 using Aep.PlatformServices.Governance;
 using Aep.PlatformServices.ModuleStatus;
 
 namespace Aep.CommandCenter;
 
 /// <summary>
-/// Backs MainWindow. Per ADR 0003 addendum A3/B2 (collector-intelligence-engine),
-/// the command center renders one entry per active row in governance's
-/// SoftwareProject / GovernanceProject tables - grouped by tier for
-/// GovernanceProject - rather than a hard-coded list of domains. Adding a
-/// new domain or command-center area is then a data change (a new row via
-/// the governance API), not a rebuild of this window.
+/// One node's resolved content for the current level of the tree - built
+/// fresh from the registry plus whatever live data is currently cached
+/// (governance briefing, software projects, module-status responses).
+/// Deliberately a plain class, not a record: content is computed once per
+/// Reload/navigation and never mutated in place, so there's no need for
+/// property-change notification on individual fields - the containing
+/// ObservableCollection is just cleared and rebuilt wholesale instead.
+/// </summary>
+public sealed class CommandCenterNodeView
+{
+    public required CommandCenterNode Node { get; init; }
+    public required bool HasChildren { get; init; }
+    public GovernanceProjectDto? GovernanceProject { get; init; }
+    public SoftwareProjectDto? SoftwareProject { get; init; }
+    public ModuleStatusCardDto? ModuleCard { get; init; }
+    public bool ModuleUnreachable { get; init; }
+    public List<ActionDto> RelatedActions { get; init; } = [];
+
+    public string Title => Node.Title;
+
+    public bool HasContent => GovernanceProject is not null || SoftwareProject is not null
+                              || ModuleCard is not null || ModuleUnreachable;
+
+    /// <summary>Nothing to show at all - no live content and no children to
+    /// drill into. Renders Node.StubText instead of an empty card.</summary>
+    public bool IsStub => !HasContent && !HasChildren;
+}
+
+/// <summary>
+/// Backs MainWindow. Renders the Command Center's tree - see
+/// Aep.ModuleContracts.CommandCenterNode for the registry shape and
+/// command-center-registry.json for the actual tree data - confirmed
+/// 2026-08-25 (the "flatten the top, layer buttons as you move down"
+/// restructure). Only one level is ever visible at a time (the current
+/// node's children, or the root nodes); navigating in/out just changes
+/// which slice of the same registry is shown. Adding, renaming, or
+/// reshuffling a card is a registry edit, not a code change to this class.
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
@@ -27,70 +59,45 @@ public sealed class MainViewModel : ObservableObject
     // click Reload once the API's actually back.
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
 
+    private static readonly string RegistryPath =
+        Path.Combine(AppContext.BaseDirectory, "command-center-registry.json");
+
     private readonly GovernanceClient _governanceClient;
 
     // One ModuleStatusClient per known domain app (Aep.PlatformServices.
     // ModuleStatus.KnownModules) - built once here rather than passed in via
     // the constructor, since there's no DI container in this app yet and
-    // every module currently uses the same no-arg construction. Keyed by
-    // base address so a per-module failure can be labeled with something
-    // meaningful even before that module has ever successfully responded
-    // (see LoadModuleStatusAsync).
+    // every module currently uses the same no-arg construction.
     private static readonly Uri[] ModuleBaseAddresses = [KnownModules.CollectorIntelligence, KnownModules.MyersWolinIp];
     private readonly Dictionary<Uri, ModuleStatusClient> _moduleStatusClients =
         ModuleBaseAddresses.ToDictionary(address => address, address => new ModuleStatusClient(address));
+
+    // Free-text Action.Area values don't always match a GovernanceProject's
+    // name exactly (e.g. "Myers Wolin AI" vs. "Myers Wolin IP Intelligence
+    // Platform") - this is a small, hand-maintained alias table for the ones
+    // that don't line up, same "small static registry, easy to edit" spirit
+    // as KnownModules. Exact (case-insensitive) matches never need an entry.
+    private static readonly Dictionary<string, string> AreaAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Myers Wolin AI"] = "Myers Wolin IP Intelligence Platform",
+        ["Lottery Intelligence"] = "Odds Market Intelligence Platform",
+    };
 
     private static readonly Dictionary<string, (string Title, string Body)> HelpTopics = new()
     {
         ["overview"] = (
             "AI Executive Platform - Command Center",
             "This console is the daily starting point across all AI Executive Platform work.\n\n" +
-            "- Domain Applications: the real, database-backed products (Collector Intelligence, " +
-            "Myers Wolin IP). 'Open' launches the app for real work; 'Develop' opens a Claude Code " +
-            "session scoped to that app's own repo.\n\n" +
-            "- Command Center Areas: everything else being tracked (finance, health, home, travel, " +
-            "etc.) that doesn't have its own dedicated app yet - a status card, with the same " +
-            "Open/Develop options if a repo exists.\n\n" +
-            "- Module Status: live data pulled directly from each Domain Application's own API right " +
-            "now (not the governance log) - e.g. today's market outlook, open deadlines. 'Go deeper' " +
-            "on any card jumps into a Claude session scoped to that specific topic.\n\n" +
-            "- Software Projects / Open Actions: the engineering backlog and open to-dos from the " +
-            "governance database.\n\n" +
-            "- Dev Catch-Up opens a Claude Code session on all of C:\\Development, pre-filled to read " +
-            "the catch-up doc. Cowork Catch-Up opens a Claude Cowork session with both governance " +
-            "repos attached. Reload refreshes everything on this screen from source.\n\n" +
-            "Click the '?' next to any section below for more detail on that section specifically."),
-        ["domain-applications"] = (
-            "Domain Applications",
-            "A Domain Application is a real product with its own database, API, and module-status " +
-            "contract - right now that's Collector Intelligence (coins/bullion) and Myers Wolin IP " +
-            "(patent practice).\n\n" +
-            "'Open' launches the app for real work. 'Develop' opens a Claude Code session scoped to " +
-            "that repo's code, for building or fixing it."),
-        ["command-center-areas"] = (
-            "Command Center Areas",
-            "Everything being tracked that isn't (yet) its own Domain Application - Personal Finance " +
-            "& Tax, Myers Family, Health, Home Technology, Travel, Research Platform, Development/" +
-            "Platform status. Each gets a status card and, if it has a repo, the same Open/Develop " +
-            "buttons.\n\n" +
-            "An area can graduate to a full Domain Application later, but only as a deliberate decision."),
-        ["software-projects"] = (
-            "Software Projects",
-            "The engineering backlog - what's being actively built or fixed across the platform's " +
-            "own code, independent of the Domain Application / Command Center Area business view above."),
-        ["open-actions"] = (
-            "Open Actions",
-            "Open to-dos logged in the governance database, sorted by priority - things waiting on " +
-            "you or on someone else, tracked so they don't get lost between sessions."),
-        ["module-status"] = (
-            "Module Status",
-            "Live data pulled straight from each Domain Application's own GET /module-status API " +
-            "right now - not from governance data entry, so it's current as of the moment this " +
-            "screen was loaded.\n\n" +
-            "Each card's color means: green = all clear, amber = worth a look, red = needs attention " +
-            "soon or something's overdue.\n\n" +
-            "'Go deeper' opens a Claude Code session pre-scoped to that exact topic, in that app's " +
-            "own repo."),
+            "Dev Catch-Up opens a Claude Code session on all of C:\\Development, pre-filled to read " +
+            "the catch-up doc - use this for actual software work. Cowork Catch-Up opens a Claude " +
+            "Cowork session with both governance repos attached - use this for broader task/research " +
+            "work that doesn't need a shell. Reload refreshes everything below from source.\n\n" +
+            "Below that is the tree: Personal Finance, Myers Wolin, Odds Market Intelligence, " +
+            "General AI, and Other Areas are the top-level domains. Press any card with a 'View " +
+            "contents' button to drill into it - a breadcrumb and Back button appear once you're " +
+            "inside one. Cards show live status where it exists (green/amber/red = ok/attention/" +
+            "alert), and a plain 'not built yet' note where it doesn't. 'Go deeper' on a live card " +
+            "opens a Claude session pre-scoped to that exact topic."),
     };
 
     private readonly DispatcherTimer _retryTimer;
@@ -98,12 +105,23 @@ public sealed class MainViewModel : ObservableObject
     private string _statusMessage = "Loading governance data...";
     private DateTimeOffset? _lastSuccessfulLoadAt;
 
-    // Statuses that mean "don't render this card" - e.g. a GovernanceProject
-    // row consolidated into another one by a governance cleanup (see
-    // scripts/sync_governance.py in collector-intelligence-engine) rather
-    // than deleted outright, so the history stays queryable via the API
-    // without cluttering the daily-use console with a duplicate/dead card.
+    // Statuses that mean "don't render this card's live content" - e.g. a
+    // GovernanceProject row consolidated into another one by a governance
+    // cleanup (see scripts/sync_governance.py in collector-intelligence-
+    // engine) rather than deleted outright, so the history stays queryable
+    // via the API without cluttering the daily-use console with a dead card.
     private static readonly string[] HiddenStatuses = ["Superseded", "Archived", "Retired"];
+
+    private List<CommandCenterNode> _registryNodes = [];
+    private ExecutiveBriefingDto? _latestBriefing;
+    private readonly Dictionary<string, ModuleStatusDto> _moduleStatusByBaseAddress = new();
+    private readonly HashSet<string> _unreachableModuleAddresses = new();
+
+    // Node ids from root to the currently open node - empty means "at the
+    // root", showing the top-level domains. Only single-step Back is wired
+    // up for now (not jump-to-any-breadcrumb-segment); BreadcrumbText still
+    // shows the full path for orientation.
+    private readonly List<string> _currentPath = [];
 
     public MainViewModel(GovernanceClient governanceClient)
     {
@@ -115,6 +133,8 @@ public sealed class MainViewModel : ObservableObject
         DevelopProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-dev.ps1", "Develop"));
         LaunchModuleCardCommand = new RelayCommand<ModuleStatusCardDto>(LaunchModuleCard);
         ShowHelpCommand = new RelayCommand<string>(ShowHelp);
+        SelectNodeCommand = new RelayCommand<CommandCenterNodeView>(SelectNode);
+        GoBackCommand = new RelayCommand(GoBack);
 
         _retryTimer = new DispatcherTimer { Interval = RetryInterval };
         _retryTimer.Tick += async (_, _) =>
@@ -126,11 +146,30 @@ public sealed class MainViewModel : ObservableObject
         };
     }
 
-    public ObservableCollection<GovernanceProjectDto> DomainApplications { get; } = [];
-    public ObservableCollection<GovernanceProjectDto> CommandCenterAreas { get; } = [];
-    public ObservableCollection<SoftwareProjectDto> SoftwareProjects { get; } = [];
-    public ObservableCollection<ActionDto> OpenActions { get; } = [];
-    public ObservableCollection<ModuleStatusDto> ModuleStatuses { get; } = [];
+    public ObservableCollection<CommandCenterNodeView> VisibleNodes { get; } = [];
+
+    /// <summary>The node currently drilled into, if any - its own content (if
+    /// it has any) renders above its children. Null at the root.</summary>
+    public CommandCenterNodeView? CurrentNode
+    {
+        get => _currentNode;
+        private set => SetField(ref _currentNode, value);
+    }
+    private CommandCenterNodeView? _currentNode;
+
+    public string BreadcrumbText
+    {
+        get => _breadcrumbText;
+        private set => SetField(ref _breadcrumbText, value);
+    }
+    private string _breadcrumbText = "Home";
+
+    public bool CanGoBack
+    {
+        get => _canGoBack;
+        private set => SetField(ref _canGoBack, value);
+    }
+    private bool _canGoBack;
 
     public bool IsLoading
     {
@@ -151,21 +190,25 @@ public sealed class MainViewModel : ObservableObject
     public ICommand DevelopProjectCommand { get; }
     public ICommand LaunchModuleCardCommand { get; }
     public ICommand ShowHelpCommand { get; }
+    public ICommand SelectNodeCommand { get; }
+    public ICommand GoBackCommand { get; }
 
     public async Task LoadAsync()
     {
         IsLoading = true;
         StatusMessage = "Loading governance data...";
+        ReloadRegistry();
+
         try
         {
             var briefing = await _governanceClient.GetBriefingAsync();
-            Populate(briefing);
+            _latestBriefing = briefing;
             _lastSuccessfulLoadAt = DateTimeOffset.Now;
             _retryTimer.Stop();
 
-            StatusMessage = $"Updated {DateTime.Now:t} - {DomainApplications.Count} domain application(s), " +
-                             $"{CommandCenterAreas.Count} command center area(s), {SoftwareProjects.Count} software " +
-                             $"project(s), {OpenActions.Count} open action(s).";
+            StatusMessage = $"Updated {DateTime.Now:t} - {briefing.GovernanceProjects.Count} governance " +
+                             $"project(s), {briefing.SoftwareProjects.Count} software project(s), " +
+                             $"{briefing.OpenActions.Count} open action(s).";
 
             // Fire-and-forget: caching is best-effort and must never delay or
             // fail a load that already succeeded (see BriefingCache).
@@ -178,10 +221,10 @@ public sealed class MainViewModel : ObservableObject
 
             if (_lastSuccessfulLoadAt is { } lastLoad)
             {
-                // Already showing real data from earlier this session (Populate
-                // is never called on failure, so it's still on screen) - just
-                // make clear it's aging, don't manufacture a scarier "nothing
-                // works" message than what's actually true.
+                // Already showing real data from earlier this session
+                // (_latestBriefing is only ever overwritten on success) -
+                // just make clear it's aging, don't manufacture a scarier
+                // "nothing works" message than what's actually true.
                 StatusMessage = $"{apiError} Still showing data as of {lastLoad:t}.";
             }
             else if (BriefingCache.TryLoad() is { } cached)
@@ -189,7 +232,7 @@ public sealed class MainViewModel : ObservableObject
                 // Cold start during an outage (e.g. Docker Desktop itself failing
                 // to start, 2026-08-18) - show the last known-good briefing
                 // instead of a blank console, clearly labeled as stale.
-                Populate(cached.Briefing);
+                _latestBriefing = cached.Briefing;
                 StatusMessage = $"{apiError} Showing cached data from {cached.FetchedAt:g} - may be out of date.";
             }
             else
@@ -203,93 +246,174 @@ public sealed class MainViewModel : ObservableObject
         {
             // Runs whether the governance fetch above succeeded or failed -
             // module status is a separate feed with its own per-module
-            // failure handling (see LoadModuleStatusAsync), so a governance
-            // outage (e.g. collector-intelligence-engine's Docker stack down)
-            // should never block Myers Wolin's module status from loading,
-            // and vice versa.
+            // failure handling, so a governance outage (e.g. collector-
+            // intelligence-engine's Docker stack down) never blocks Myers
+            // Wolin's module status from loading, and vice versa.
             await LoadModuleStatusAsync();
+            RebuildVisibleNodes();
             IsLoading = false;
         }
     }
 
     /// <summary>
+    /// Re-reads command-center-registry.json from disk on every load, not
+    /// just at startup - so a hand-edit to the tree shape takes effect on
+    /// the next Reload press, no rebuild or restart needed. A broken or
+    /// missing file keeps whatever registry was already loaded (empty on
+    /// first run) rather than crashing the whole load.
+    /// </summary>
+    private void ReloadRegistry()
+    {
+        try
+        {
+            _registryNodes = CommandCenterRegistryLoader.LoadFromFile(RegistryPath);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not load the Command Center registry ({ex.Message}).";
+        }
+    }
+
+    /// <summary>
     /// Fetches every known module's GET /module-status independently - one
-    /// module being unreachable never blocks another's cards from rendering,
-    /// and shows up as its own "unreachable" card (severity alert) rather
-    /// than a silent gap or a thrown exception.
+    /// module being unreachable never blocks another's cards, and every leaf
+    /// pointed at that module renders as unreachable (see RebuildVisibleNodes)
+    /// rather than silently showing nothing.
     /// </summary>
     private async Task LoadModuleStatusAsync()
     {
-        var results = new List<ModuleStatusDto>();
+        _unreachableModuleAddresses.Clear();
 
         foreach (var (address, client) in _moduleStatusClients)
         {
             try
             {
-                results.Add(await client.GetStatusAsync());
+                _moduleStatusByBaseAddress[address.ToString()] = await client.GetStatusAsync();
             }
-            catch (Exception ex)
+            catch
             {
-                results.Add(new ModuleStatusDto(
-                    Module: address.Authority,
-                    DisplayName: $"{address.Authority} (unreachable)",
-                    GeneratedAt: DateTimeOffset.Now,
-                    Cards:
-                    [
-                        new ModuleStatusCardDto(
-                            Id: "unreachable",
-                            Title: "Unavailable",
-                            Headline: $"Could not reach {address} - is its Docker stack running?",
-                            Detail: ex.Message,
-                            Severity: ModuleStatusSeverity.Alert,
-                            UpdatedAt: null,
-                            WebUrl: null,
-                            ClaudeDeepLink: null),
-                    ]));
+                _unreachableModuleAddresses.Add(address.ToString());
             }
-        }
-
-        ModuleStatuses.Clear();
-        foreach (var status in results)
-        {
-            ModuleStatuses.Add(status);
         }
     }
 
-    private void Populate(ExecutiveBriefingDto briefing)
+    /// <summary>Rebuilds VisibleNodes (and CurrentNode/BreadcrumbText) for
+    /// whatever level of the tree _currentPath currently points at, using
+    /// whatever governance/module data is currently cached. Called after
+    /// every load and after every navigation.</summary>
+    private void RebuildVisibleNodes()
     {
-        DomainApplications.Clear();
-        CommandCenterAreas.Clear();
-        SoftwareProjects.Clear();
-        OpenActions.Clear();
+        var parentId = _currentPath.Count > 0 ? _currentPath[^1] : null;
 
-        foreach (var project in briefing.GovernanceProjects
-                     .Where(p => !HiddenStatuses.Contains(p.Status, StringComparer.OrdinalIgnoreCase))
-                     .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        CurrentNode = parentId is null
+            ? null
+            : BuildNodeView(_registryNodes.First(n => n.Id == parentId));
+
+        BreadcrumbText = _currentPath.Count == 0
+            ? "Home"
+            : "Home > " + string.Join(" > ", _currentPath.Select(id => _registryNodes.First(n => n.Id == id).Title));
+
+        CanGoBack = _currentPath.Count > 0;
+
+        VisibleNodes.Clear();
+        foreach (var node in _registryNodes.Where(n => n.ParentId == parentId))
         {
-            if (project.Tier == GovernanceTiers.DomainApplication)
+            VisibleNodes.Add(BuildNodeView(node));
+        }
+    }
+
+    private CommandCenterNodeView BuildNodeView(CommandCenterNode node)
+    {
+        var hasChildren = _registryNodes.Any(n => n.ParentId == node.Id);
+
+        GovernanceProjectDto? governanceProject = null;
+        if (node.GovernanceProjectName is not null)
+        {
+            governanceProject = _latestBriefing?.GovernanceProjects.FirstOrDefault(p =>
+                p.Name == node.GovernanceProjectName
+                && !HiddenStatuses.Contains(p.Status, StringComparer.OrdinalIgnoreCase));
+        }
+
+        SoftwareProjectDto? softwareProject = null;
+        if (node.SoftwareProjectName is not null)
+        {
+            softwareProject = _latestBriefing?.SoftwareProjects
+                .FirstOrDefault(p => p.Name == node.SoftwareProjectName);
+        }
+
+        ModuleStatusCardDto? moduleCard = null;
+        var moduleUnreachable = false;
+        if (node.ModuleBaseAddressUri is not null)
+        {
+            var key = node.ModuleBaseAddressUri.ToString();
+            if (_unreachableModuleAddresses.Contains(key))
             {
-                DomainApplications.Add(project);
+                moduleUnreachable = true;
             }
-            else
+            else if (node.ModuleCardId is not null
+                     && _moduleStatusByBaseAddress.TryGetValue(key, out var status))
             {
-                // Anything not explicitly tagged "Domain Application" - including
-                // an untagged/unclassified row - renders as a Command Center Area.
-                // That's the safer default: an unclassified row should still show
-                // up somewhere rather than silently vanish from the console.
-                CommandCenterAreas.Add(project);
+                moduleCard = status.Cards.FirstOrDefault(c => c.Id == node.ModuleCardId);
             }
         }
 
-        foreach (var project in briefing.SoftwareProjects.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        var relatedActions = _latestBriefing?.OpenActions
+            .Where(a => AreaMatchesGovernanceProject(a.Area, node.GovernanceProjectName))
+            .ToList() ?? [];
+
+        return new CommandCenterNodeView
         {
-            SoftwareProjects.Add(project);
+            Node = node,
+            HasChildren = hasChildren,
+            GovernanceProject = governanceProject,
+            SoftwareProject = softwareProject,
+            ModuleCard = moduleCard,
+            ModuleUnreachable = moduleUnreachable,
+            RelatedActions = relatedActions,
+        };
+    }
+
+    private static bool AreaMatchesGovernanceProject(string? area, string? governanceProjectName)
+    {
+        if (area is null || governanceProjectName is null)
+        {
+            return false;
         }
 
-        foreach (var action in briefing.OpenActions)
+        if (string.Equals(area, governanceProjectName, StringComparison.OrdinalIgnoreCase))
         {
-            OpenActions.Add(action);
+            return true;
         }
+
+        return AreaAliases.TryGetValue(area, out var aliased)
+               && string.Equals(aliased, governanceProjectName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Backs SelectNodeCommand - drills into a node's children when
+    /// its "View contents" button is pressed. No-op for a node with nothing
+    /// underneath it (the button isn't shown in that case anyway).</summary>
+    private Task SelectNode(CommandCenterNodeView nodeView)
+    {
+        if (nodeView.HasChildren)
+        {
+            _currentPath.Add(nodeView.Node.Id);
+            RebuildVisibleNodes();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Backs GoBackCommand - steps back up one level. A no-op at the
+    /// root (CanGoBack is false there, so the button is disabled anyway).</summary>
+    private Task GoBack()
+    {
+        if (_currentPath.Count > 0)
+        {
+            _currentPath.RemoveAt(_currentPath.Count - 1);
+            RebuildVisibleNodes();
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -355,8 +479,8 @@ public sealed class MainViewModel : ObservableObject
     /// launch-dev.ps1 at the repo root) rather than this shell duplicating
     /// docker/npm/claude-deep-link details per project - this method just
     /// finds and runs the right script. A project with no RepoPath (most
-    /// Command Center Areas - button + status only, no dedicated repo) has
-    /// nothing to launch, which is expected, not an error.
+    /// areas - button + status only, no dedicated repo) has nothing to
+    /// launch, which is expected, not an error.
     /// </summary>
     private Task LaunchAsync(GovernanceProjectDto project, string scriptName, string actionLabel)
     {
@@ -432,11 +556,10 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Backs ShowHelpCommand - the '?' buttons next to the header and each
-    /// section. Deliberately a plain MessageBox rather than a custom dialog:
-    /// this app has no dialog infrastructure yet and the help content is
-    /// static text, so a MessageBox is the simplest thing that actually
-    /// works. See HelpTopics for the content itself.
+    /// Backs ShowHelpCommand - the '?' button next to the header. Deliberately
+    /// a plain MessageBox rather than a custom dialog: this app has no dialog
+    /// infrastructure yet and the help content is static text, so a MessageBox
+    /// is the simplest thing that actually works. See HelpTopics for content.
     /// </summary>
     private Task ShowHelp(string topic)
     {

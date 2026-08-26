@@ -45,3 +45,17 @@ public sealed class NullOrEmptyToVisibilityConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }
+
+/// <summary>
+/// Shows an element only when the bound value is non-null - used across the
+/// Command Center tree's card template, where a node might have a
+/// GovernanceProject, a SoftwareProject, a ModuleCard, all, or none.
+/// </summary>
+public sealed class NotNullToVisibilityConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is null ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+
+    public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
