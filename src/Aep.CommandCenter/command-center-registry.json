@@ -71,9 +71,9 @@
     "parent_id": "myers-wolin",
     "governance_project_name": null,
     "software_project_name": null,
-    "module_base_address": null,
-    "module_card_id": null,
-    "stub_text": "Not built yet as its own summary - office-action data exists (see Deadlines), but an aggregate view isn't built.",
+    "module_base_address": "http://localhost:8001/",
+    "module_card_id": "office-action-responses",
+    "stub_text": null,
     "stub_deep_link": null
   },
   {
