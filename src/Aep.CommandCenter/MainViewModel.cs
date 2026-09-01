@@ -303,15 +303,24 @@ public sealed class MainViewModel : ObservableObject
     /// every load and after every navigation.</summary>
     private void RebuildVisibleNodes()
     {
+        // A hand-edit to the registry between Reloads can delete a node we're
+        // currently drilled into (or one of its ancestors). Trim _currentPath
+        // back to its longest still-valid prefix rather than letting a lookup
+        // below throw - a reset to a higher level is a fine recovery, a crash
+        // isn't.
+        PruneCurrentPathToValid();
+
         var parentId = _currentPath.Count > 0 ? _currentPath[^1] : null;
 
-        CurrentNode = parentId is null
+        var parentNode = parentId is null
             ? null
-            : BuildNodeView(_registryNodes.First(n => n.Id == parentId));
+            : _registryNodes.FirstOrDefault(n => n.Id == parentId);
+        CurrentNode = parentNode is null ? null : BuildNodeView(parentNode);
 
         BreadcrumbText = _currentPath.Count == 0
             ? "Home"
-            : "Home > " + string.Join(" > ", _currentPath.Select(id => _registryNodes.First(n => n.Id == id).Title));
+            : "Home > " + string.Join(" > ", _currentPath.Select(id =>
+                _registryNodes.FirstOrDefault(n => n.Id == id)?.Title ?? id));
 
         CanGoBack = _currentPath.Count > 0;
 
@@ -319,6 +328,32 @@ public sealed class MainViewModel : ObservableObject
         foreach (var node in _registryNodes.Where(n => n.ParentId == parentId))
         {
             VisibleNodes.Add(BuildNodeView(node));
+        }
+    }
+
+    /// <summary>Drops any trailing segments of _currentPath that no longer
+    /// resolve to a real parent-linked chain in the current registry (a node
+    /// was renamed or removed by a hand-edit). Keeps the longest valid
+    /// prefix.</summary>
+    private void PruneCurrentPathToValid()
+    {
+        var valid = new List<string>();
+        string? expectedParentId = null;
+        foreach (var id in _currentPath)
+        {
+            var node = _registryNodes.FirstOrDefault(n => n.Id == id);
+            if (node is null || node.ParentId != expectedParentId)
+            {
+                break;
+            }
+            valid.Add(id);
+            expectedParentId = id;
+        }
+
+        if (valid.Count != _currentPath.Count)
+        {
+            _currentPath.Clear();
+            _currentPath.AddRange(valid);
         }
     }
 
@@ -473,6 +508,13 @@ public sealed class MainViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
+    // Upper bound on how long we'll narrate a launch before handing it off to
+    // the background. The launch scripts' own Wait-DockerReady caps at 120s; on
+    // a cold Docker Desktop start that plus compose plus opening a Claude
+    // session can run past two minutes, so give it real headroom. Hitting this
+    // never kills the script - it just stops the play-by-play.
+    private static readonly TimeSpan LaunchNarrationTimeout = TimeSpan.FromSeconds(240);
+
     /// <summary>
     /// Backs both OpenProjectCommand and DevelopProjectCommand. Each
     /// project's own repo owns its launch logic (launch-open.ps1 /
@@ -481,46 +523,119 @@ public sealed class MainViewModel : ObservableObject
     /// finds and runs the right script. A project with no RepoPath (most
     /// areas - button + status only, no dedicated repo) has nothing to
     /// launch, which is expected, not an error.
+    ///
+    /// The script is run with its output captured and streamed line-by-line
+    /// into StatusMessage - Wait-DockerReady on a cold start is a 30-120s
+    /// wait with nothing else to look at, so "Waiting for Docker Desktop's
+    /// engine to be ready..." showing up in the status bar is the difference
+    /// between "working" and "hung". On a clean exit we Reload so the module
+    /// card flips from "unreachable" to live on its own.
     /// </summary>
-    private Task LaunchAsync(GovernanceProjectDto project, string scriptName, string actionLabel)
+    private async Task LaunchAsync(GovernanceProjectDto project, string scriptName, string actionLabel)
     {
         if (!project.HasRepoPath)
         {
             StatusMessage = $"{project.Name} has no repo linked - nothing to {actionLabel.ToLowerInvariant()}.";
-            return Task.CompletedTask;
+            return;
         }
 
         var scriptPath = Path.Combine(project.RepoPath!, scriptName);
         if (!File.Exists(scriptPath))
         {
             StatusMessage = $"{actionLabel} script not found for {project.Name}: {scriptPath}";
-            return Task.CompletedTask;
+            return;
         }
+
+        var verb = actionLabel.ToLowerInvariant();
+        StatusMessage = $"{actionLabel}ing {project.Name} - starting Docker and the API " +
+                         "(a cold start can take a minute or two)...";
+
+        var psi = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = project.RepoPath!,
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-File");
+        psi.ArgumentList.Add(scriptPath);
+
+        using var narrationTimeout = new CancellationTokenSource(LaunchNarrationTimeout);
+        string? lastLine = null;
 
         try
         {
-            var psi = new ProcessStartInfo("powershell.exe")
-            {
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-            };
-            psi.ArgumentList.Add("-NoProfile");
-            psi.ArgumentList.Add("-ExecutionPolicy");
-            psi.ArgumentList.Add("Bypass");
-            psi.ArgumentList.Add("-File");
-            psi.ArgumentList.Add(scriptPath);
-            Process.Start(psi);
+            using var process = new Process { StartInfo = psi };
+            process.Start();
 
-            StatusMessage = $"{actionLabel}ing {project.Name}... " +
-                             "(the launch script may pop its own window - e.g. a dev server terminal " +
-                             "or a Claude Code session - give it a few seconds)";
+            // Drain stderr concurrently so a chatty script can't wedge on a
+            // full pipe; the script surfaces its own hard failures via a
+            // MessageBox and a non-zero exit, so stderr here is just detail.
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            while (true)
+            {
+                string? line;
+                try
+                {
+                    line = await process.StandardOutput.ReadLineAsync(narrationTimeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                if (line is null)
+                {
+                    break;
+                }
+
+                line = line.Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                lastLine = line;
+                // ReadLineAsync resumed us on the UI thread (WPF sync context),
+                // so touching StatusMessage here needs no marshalling.
+                StatusMessage = $"{actionLabel}ing {project.Name}: {line}";
+            }
+
+            if (narrationTimeout.IsCancellationRequested)
+            {
+                // Observe stderr so the abandoned Task doesn't fault unheard.
+                _ = stderrTask.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
+                StatusMessage = $"{actionLabel} for {project.Name} is still working after " +
+                                 $"{(int)LaunchNarrationTimeout.TotalSeconds / 60} min - check Docker " +
+                                 "Desktop's tray icon. It keeps running in the background; press Reload " +
+                                 "once its card goes live.";
+                return;
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None);
+            var stderr = (await stderrTask).Trim();
+
+            if (process.ExitCode != 0)
+            {
+                var detail = !string.IsNullOrEmpty(stderr) ? stderr
+                    : lastLine ?? $"exit code {process.ExitCode}";
+                StatusMessage = $"{actionLabel} for {project.Name} failed: {detail}";
+                return;
+            }
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Could not {actionLabel.ToLowerInvariant()} {project.Name}: {ex.Message}";
+            StatusMessage = $"Could not {verb} {project.Name}: {ex.Message}";
+            return;
         }
 
-        return Task.CompletedTask;
+        StatusMessage = $"{actionLabel} for {project.Name} is up - refreshing status...";
+        await LoadAsync();
     }
 
     /// <summary>

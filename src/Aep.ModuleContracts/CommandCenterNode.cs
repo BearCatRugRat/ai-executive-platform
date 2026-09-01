@@ -36,6 +36,10 @@ public sealed record CommandCenterNode(
 {
     /// <summary>Parsed on demand rather than stored as a Uri directly -- kept as
     /// a plain string on the record so JSON round-trips without depending on
-    /// System.Text.Json's Uri converter behavior.</summary>
-    public Uri? ModuleBaseAddressUri => ModuleBaseAddress is null ? null : new Uri(ModuleBaseAddress);
+    /// System.Text.Json's Uri converter behavior. Returns null (rather than
+    /// throwing) for a missing or malformed address; the registry loader
+    /// rejects malformed addresses up front, so a null here at render time
+    /// means "no module wired to this node".</summary>
+    public Uri? ModuleBaseAddressUri =>
+        Uri.TryCreate(ModuleBaseAddress, UriKind.Absolute, out var uri) ? uri : null;
 }

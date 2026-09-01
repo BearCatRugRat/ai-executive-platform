@@ -38,6 +38,18 @@ public static class CommandCenterRegistryLoader
                     $"Command Center registry node '{node.Id}' has ParentId '{node.ParentId}', " +
                     "which doesn't match any node's Id.");
             }
+
+            // Caught here rather than at render time: a typo'd address
+            // ("htp://localhost:8001") would otherwise blow up deep inside
+            // MainViewModel.BuildNodeView. ReloadRegistry swallows this into a
+            // clear status message and keeps the last good tree.
+            if (node.ModuleBaseAddress is not null
+                && !Uri.TryCreate(node.ModuleBaseAddress, UriKind.Absolute, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Command Center registry node '{node.Id}' has ModuleBaseAddress " +
+                    $"'{node.ModuleBaseAddress}', which isn't a valid absolute URI.");
+            }
         }
 
         return nodes;
