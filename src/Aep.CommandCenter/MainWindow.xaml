@@ -148,6 +148,31 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
 
+                  <ItemsControl ItemsSource="{Binding Actions}" Margin="0,10,0,0"
+                                Visibility="{Binding HasActions, Converter={StaticResource BoolToVis}}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Button Content="{Binding Label}" Padding="12,6" Margin="0,0,0,6" HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left" FontSize="12" Foreground="White" BorderThickness="0"
+                                Command="{Binding DataContext.LaunchNodeActionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}">
+                          <Button.Style>
+                            <Style TargetType="Button">
+                              <Setter Property="Background" Value="#3A4A66"/>
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding Primary}" Value="True">
+                                  <Setter Property="Background" Value="#2F9E6F"/>
+                                  <Setter Property="FontWeight" Value="Bold"/>
+                                  <Setter Property="Padding" Value="12,9"/>
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </Button.Style>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
                   <TextBlock Text="{Binding Node.StubText}" FontSize="12" Foreground="#6B7A90" Margin="0,8,0,0" TextWrapping="Wrap"
                              Visibility="{Binding IsStub, Converter={StaticResource BoolToVis}}"/>
 

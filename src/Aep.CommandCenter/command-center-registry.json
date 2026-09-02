@@ -93,10 +93,29 @@
     "parent_id": "myers-wolin",
     "governance_project_name": null,
     "software_project_name": null,
-    "module_base_address": null,
-    "module_card_id": null,
-    "stub_text": "Not built yet as its own summary - application-draft data already exists and could back this fairly easily.",
-    "stub_deep_link": null
+    "module_base_address": "http://localhost:8001/",
+    "module_card_id": "uspto-filing-documents",
+    "stub_text": null,
+    "stub_deep_link": null,
+    "actions": [
+      {
+        "primary": true,
+        "label": "Get up to speed on filing-doc rules",
+        "deep_link": "claude://code/new?q=Get%20me%20up%20to%20speed%20on%20Myers%20Wolin%20USPTO%20filing-document%20generation%20rules%20before%20we%20start.%20Read%20knowledge/filing/uspto-forms-rules.md%20and%20knowledge/filing/README.md%2C%20the%20module%20docstrings%20in%20apps/api/services/uspto_forms/%20%28ads.py%2C%20ids.py%2C%20pto1390.py%2C%20sb439.py%2C%20xfa.py%2C%20firm_config.py%2C%20profiles.py%2C%20prefill/shiga.py%29%2C%20training-data/filing-packages/_PATTERNS-371-shiga.md%2C%20and%20the%20%22USPTO%20form%20generation%22%20section%20of%20CURRENT_STATE.md.%20Then%20summarize%20the%20ruleset%20and%20the%20known%20gaps%20and%20wait%20for%20me.&folder=C%3A%5CDevelopment%5Cmyers-wolin-ip-intelligence"
+      },
+      {
+        "label": "Prepare USPTO filing docs",
+        "deep_link": "claude://code/new?q=Prepare%20a%20USPTO%20371%20national-stage%20filing%20package%20in%20myers-wolin-ip-intelligence.%20First%20read%20knowledge/filing/uspto-forms-rules.md%20for%20the%20ruleset.%20Confirm%20the%20API%20is%20up%20at%20http%3A//localhost%3A8001%2C%20then%20walk%20me%20through%20creating%20the%20ApplicationDraft%2C%20prefilling%20filing_data%20from%20the%20associate%20order%20letter%20%28POST%20/application-drafts/%7Bid%7D/prefill-filing-data%29%2C%20reviewing%20the%20gap%20notes%2C%20and%20generating%20the%20ADS%2C%20IDS%2C%20PTO-1390%20transmittal%20and%20SB-439%20forms.&folder=C%3A%5CDevelopment%5Cmyers-wolin-ip-intelligence"
+      },
+      {
+        "label": "Prepare IDS",
+        "deep_link": "claude://code/new?q=Prepare%20a%20standalone%20Information%20Disclosure%20Statement%20%28PTO/SB/08%29%20in%20myers-wolin-ip-intelligence%2C%20separate%20from%20a%20full%20new-application%20filing%20package.%20First%20read%20the%20IDS%20section%20of%20knowledge/filing/uspto-forms-rules.md%20%28note%20the%20standalone%201.97%28e%29%20certification%20caveat%29.%20Ask%20me%20which%20matter%20or%20application%20draft%20this%20is%20for%20and%20for%20the%20reference%20list%2C%20then%20generate%20the%20IDS.&folder=C%3A%5CDevelopment%5Cmyers-wolin-ip-intelligence"
+      },
+      {
+        "label": "Prepare declaration / assignment",
+        "deep_link": "claude://code/new?q=Prepare%20an%20inventor%20declaration%20and%20an%20assignment%20in%20myers-wolin-ip-intelligence%2C%20separate%20from%20a%20full%20filing%20package.%20First%20read%20the%20declaration/assignment%20section%20of%20knowledge/filing/uspto-forms-rules.md.%20Note%20there%20is%20no%20form%20generator%20for%20these%20yet%20-%20draft%20from%20the%20firm/client%20template.%20Ask%20me%20which%20matter%20or%20application%20draft%20this%20is%20for%20and%20for%20the%20inventor%20and%20assignee%20details.&folder=C%3A%5CDevelopment%5Cmyers-wolin-ip-intelligence"
+      }
+    ]
   },
   {
     "id": "deadlines",

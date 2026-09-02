@@ -32,7 +32,8 @@ public sealed record CommandCenterNode(
     string? ModuleBaseAddress,
     string? ModuleCardId,
     string? StubText,
-    string? StubDeepLink)
+    string? StubDeepLink,
+    IReadOnlyList<CommandCenterNodeAction>? Actions = null)
 {
     /// <summary>Parsed on demand rather than stored as a Uri directly -- kept as
     /// a plain string on the record so JSON round-trips without depending on
@@ -43,3 +44,15 @@ public sealed record CommandCenterNode(
     public Uri? ModuleBaseAddressUri =>
         Uri.TryCreate(ModuleBaseAddress, UriKind.Absolute, out var uri) ? uri : null;
 }
+
+/// <summary>A labelled launch button on a node. DeepLink is opened with
+/// Process.Start (a claude://code/new URL or any other launchable link) --
+/// the same mechanism as a module card's "Go deeper" button. Rendered
+/// above StubText / "View contents", so a node can offer actions whether
+/// or not it also has a live card or children. Primary marks the button
+/// as the node's main action (the one the tile "opens" into) -- styled
+/// more prominently and always listed first.</summary>
+public sealed record CommandCenterNodeAction(
+    string Label,
+    string DeepLink,
+    bool Primary = false);

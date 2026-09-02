@@ -33,12 +33,20 @@ public sealed class CommandCenterNodeView
 
     public string Title => Node.Title;
 
+    /// <summary>The node's launch buttons, primary first. Empty when the
+    /// registry entry has no "actions" array.</summary>
+    public IReadOnlyList<CommandCenterNodeAction> Actions =>
+        (Node.Actions ?? []).OrderByDescending(a => a.Primary).ToList();
+
+    public bool HasActions => Actions.Count > 0;
+
     public bool HasContent => GovernanceProject is not null || SoftwareProject is not null
                               || ModuleCard is not null || ModuleUnreachable;
 
-    /// <summary>Nothing to show at all - no live content and no children to
-    /// drill into. Renders Node.StubText instead of an empty card.</summary>
-    public bool IsStub => !HasContent && !HasChildren;
+    /// <summary>Nothing to show at all - no live content, no launch buttons,
+    /// and no children to drill into. Renders Node.StubText instead of an
+    /// empty card.</summary>
+    public bool IsStub => !HasContent && !HasChildren && !HasActions;
 }
 
 /// <summary>
@@ -132,6 +140,7 @@ public sealed class MainViewModel : ObservableObject
         OpenProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-open.ps1", "Open"));
         DevelopProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-dev.ps1", "Develop"));
         LaunchModuleCardCommand = new RelayCommand<ModuleStatusCardDto>(LaunchModuleCard);
+        LaunchNodeActionCommand = new RelayCommand<CommandCenterNodeAction>(LaunchNodeAction);
         ShowHelpCommand = new RelayCommand<string>(ShowHelp);
         SelectNodeCommand = new RelayCommand<CommandCenterNodeView>(SelectNode);
         GoBackCommand = new RelayCommand(GoBack);
@@ -189,6 +198,7 @@ public sealed class MainViewModel : ObservableObject
     public ICommand OpenProjectCommand { get; }
     public ICommand DevelopProjectCommand { get; }
     public ICommand LaunchModuleCardCommand { get; }
+    public ICommand LaunchNodeActionCommand { get; }
     public ICommand ShowHelpCommand { get; }
     public ICommand SelectNodeCommand { get; }
     public ICommand GoBackCommand { get; }
@@ -665,6 +675,36 @@ public sealed class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"Could not open the link for '{card.Title}' ({ex.Message}).";
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Backs LaunchNodeActionCommand - a node's own launch buttons (the
+    /// registry "actions" array). Same Process.Start mechanism as
+    /// LaunchModuleCard's "Go deeper"; a node action is always a claude://
+    /// deep link today, but nothing here assumes that.
+    /// </summary>
+    private Task LaunchNodeAction(CommandCenterNodeAction action)
+    {
+        if (string.IsNullOrWhiteSpace(action.DeepLink))
+        {
+            StatusMessage = $"'{action.Label}' has no link to open.";
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(action.DeepLink) { UseShellExecute = true });
+            StatusMessage = action.DeepLink.StartsWith("claude://", StringComparison.Ordinal)
+                ? $"Opening a Claude session for '{action.Label}' - press Enter in the new window " +
+                  "to send the pre-filled prompt (Claude Desktop deep links never auto-send, by design)."
+                : $"Opening '{action.Label}'.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not open '{action.Label}' ({ex.Message}).";
         }
 
         return Task.CompletedTask;
