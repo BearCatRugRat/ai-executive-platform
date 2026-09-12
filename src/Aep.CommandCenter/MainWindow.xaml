@@ -136,6 +136,11 @@
                              Margin="0,8,0,0" TextWrapping="Wrap"
                              Visibility="{Binding ModuleUnreachable, Converter={StaticResource BoolToVis}}"/>
 
+                  <TextBlock Text="Module not registered - add its address to KnownModules.cs" FontSize="12" Foreground="#E0A458"
+                             Margin="0,8,0,0" TextWrapping="Wrap"
+                             ToolTip="This node's module_base_address doesn't match any client the Command Center knows how to talk to yet - a registry edit alone isn't enough for a brand-new module, it also needs an entry in Aep.PlatformServices/ModuleStatus/KnownModules.cs."
+                             Visibility="{Binding ModuleNotRegistered, Converter={StaticResource BoolToVis}}"/>
+
                   <ItemsControl ItemsSource="{Binding RelatedActions}" Margin="0,6,0,0">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate>

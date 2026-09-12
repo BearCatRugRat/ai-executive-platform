@@ -29,6 +29,18 @@ public sealed class CommandCenterNodeView
     public SoftwareProjectDto? SoftwareProject { get; init; }
     public ModuleStatusCardDto? ModuleCard { get; init; }
     public bool ModuleUnreachable { get; init; }
+
+    /// <summary>True when the node names a ModuleBaseAddress that isn't one
+    /// of Aep.PlatformServices.ModuleStatus.KnownModules -- a registry-only
+    /// edit can reuse an existing module, but wiring up a brand-new one
+    /// still needs a code change there. Distinct from ModuleUnreachable
+    /// (a known module whose Docker stack happens to be down right now):
+    /// this means the Command Center has no client for that address at
+    /// all, so a stub-looking card here would misleadingly suggest "not
+    /// built yet" when the real fix is a one-line addition to
+    /// KnownModules.cs, not a new backend feature.</summary>
+    public bool ModuleNotRegistered { get; init; }
+
     public List<ActionDto> RelatedActions { get; init; } = [];
 
     public string Title => Node.Title;
@@ -41,7 +53,7 @@ public sealed class CommandCenterNodeView
     public bool HasActions => Actions.Count > 0;
 
     public bool HasContent => GovernanceProject is not null || SoftwareProject is not null
-                              || ModuleCard is not null || ModuleUnreachable;
+                              || ModuleCard is not null || ModuleUnreachable || ModuleNotRegistered;
 
     /// <summary>Nothing to show at all - no live content, no launch buttons,
     /// and no children to drill into. Renders Node.StubText instead of an
@@ -388,10 +400,19 @@ public sealed class MainViewModel : ObservableObject
 
         ModuleStatusCardDto? moduleCard = null;
         var moduleUnreachable = false;
+        var moduleNotRegistered = false;
         if (node.ModuleBaseAddressUri is not null)
         {
             var key = node.ModuleBaseAddressUri.ToString();
-            if (_unreachableModuleAddresses.Contains(key))
+            if (!_moduleStatusClients.ContainsKey(node.ModuleBaseAddressUri))
+            {
+                // A syntactically valid address the registry loader accepted,
+                // but no ModuleStatusClient exists for it - adding a new
+                // domain app's address to a registry node needs a matching
+                // entry in KnownModules.cs, not just the JSON edit.
+                moduleNotRegistered = true;
+            }
+            else if (_unreachableModuleAddresses.Contains(key))
             {
                 moduleUnreachable = true;
             }
@@ -414,6 +435,7 @@ public sealed class MainViewModel : ObservableObject
             SoftwareProject = softwareProject,
             ModuleCard = moduleCard,
             ModuleUnreachable = moduleUnreachable,
+            ModuleNotRegistered = moduleNotRegistered,
             RelatedActions = relatedActions,
         };
     }
