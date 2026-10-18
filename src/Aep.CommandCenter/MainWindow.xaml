@@ -5,6 +5,10 @@
     <local:NullOrEmptyToVisibilityConverter x:Key="NullOrEmptyToVis"/>
     <local:NotNullToVisibilityConverter x:Key="NotNullToVis"/>
   </Window.Resources>
+  <Window.InputBindings>
+    <KeyBinding Key="F5" Command="{Binding ReloadCommand}"/>
+    <KeyBinding Modifiers="Alt" Key="Left" Command="{Binding GoBackCommand}"/>
+  </Window.InputBindings>
   <Grid Margin="24">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
@@ -25,9 +29,12 @@
         <Button Content="?" Width="28" Height="28" Margin="12,0,0,0" Padding="0" FontWeight="Bold"
                 Background="#2A3A55" Foreground="White" BorderThickness="0" VerticalAlignment="Top"
                 ToolTip="What is this console? Click for an overview."
+                AutomationProperties.Name="Help - what is this console"
                 Command="{Binding ShowHelpCommand}" CommandParameter="overview"/>
       </StackPanel>
-      <Button Grid.Column="1" Content="Reload" Padding="16,8" VerticalAlignment="Center" Command="{Binding ReloadCommand}"/>
+      <Button Grid.Column="1" Content="Reload" Padding="16,8" VerticalAlignment="Center"
+              ToolTip="Reload (F5)" AutomationProperties.Name="Reload"
+              Command="{Binding ReloadCommand}"/>
     </Grid>
 
     <Border Grid.Row="1" Margin="0,18,0,18" Padding="18" Background="#142033" CornerRadius="10">
@@ -61,7 +68,8 @@
         <!-- Row 2+: the domain tree - one level visible at a time -->
         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
           <Button Content="&lt; Back" Padding="10,4" Margin="0,0,10,0" FontSize="12" Background="#2A3A55" Foreground="White"
-                  BorderThickness="0" IsEnabled="{Binding CanGoBack}" Command="{Binding GoBackCommand}"/>
+                  BorderThickness="0" IsEnabled="{Binding CanGoBack}" Command="{Binding GoBackCommand}"
+                  ToolTip="Back (Alt+Left)" AutomationProperties.Name="Back"/>
           <TextBlock Text="{Binding BreadcrumbText}" FontSize="13" Foreground="#9FB3C8" VerticalAlignment="Center"/>
         </StackPanel>
 

@@ -300,19 +300,36 @@ public sealed class MainViewModel : ObservableObject
     /// Fetches every known module's GET /module-status independently - one
     /// module being unreachable never blocks another's cards, and every leaf
     /// pointed at that module renders as unreachable (see RebuildVisibleNodes)
-    /// rather than silently showing nothing.
+    /// rather than silently showing nothing. Fetched concurrently rather than
+    /// one at a time: each client has its own 10s timeout, so a sequential
+    /// loop would let N unreachable modules add up to N*10s of serial waiting
+    /// before the console can render anything. Task.WhenAll caps the total
+    /// wait at the slowest single module regardless of how many are down.
     /// </summary>
     private async Task LoadModuleStatusAsync()
     {
         _unreachableModuleAddresses.Clear();
 
-        foreach (var (address, client) in _moduleStatusClients)
+        var fetches = _moduleStatusClients.Select(async pair =>
         {
+            var (address, client) = pair;
             try
             {
-                _moduleStatusByBaseAddress[address.ToString()] = await client.GetStatusAsync();
+                return (address, Status: (ModuleStatusDto?)await client.GetStatusAsync());
             }
             catch
+            {
+                return (address, Status: null);
+            }
+        });
+
+        foreach (var (address, status) in await Task.WhenAll(fetches))
+        {
+            if (status is not null)
+            {
+                _moduleStatusByBaseAddress[address.ToString()] = status;
+            }
+            else
             {
                 _unreachableModuleAddresses.Add(address.ToString());
             }
