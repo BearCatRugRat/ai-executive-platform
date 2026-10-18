@@ -1,20 +1,75 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Aep.Core;
+using Aep.ModuleContracts;
+using Aep.PlatformServices.CommandCenterRegistry;
 using Aep.PlatformServices.Governance;
+using Aep.PlatformServices.ModuleStatus;
 
 namespace Aep.CommandCenter;
 
 /// <summary>
-/// Backs MainWindow. Per ADR 0003 addendum A3/B2 (collector-intelligence-engine),
-/// the command center renders one entry per active row in governance's
-/// SoftwareProject / GovernanceProject tables - grouped by tier for
-/// GovernanceProject - rather than a hard-coded list of domains. Adding a
-/// new domain or command-center area is then a data change (a new row via
-/// the governance API), not a rebuild of this window.
+/// One node's resolved content for the current level of the tree - built
+/// fresh from the registry plus whatever live data is currently cached
+/// (governance briefing, software projects, module-status responses).
+/// Deliberately a plain class, not a record: content is computed once per
+/// Reload/navigation and never mutated in place, so there's no need for
+/// property-change notification on individual fields - the containing
+/// ObservableCollection is just cleared and rebuilt wholesale instead.
+/// </summary>
+public sealed class CommandCenterNodeView
+{
+    public required CommandCenterNode Node { get; init; }
+    public required bool HasChildren { get; init; }
+    public GovernanceProjectDto? GovernanceProject { get; init; }
+    public SoftwareProjectDto? SoftwareProject { get; init; }
+    public ModuleStatusCardDto? ModuleCard { get; init; }
+    public bool ModuleUnreachable { get; init; }
+
+    /// <summary>True when the node names a ModuleBaseAddress that isn't one
+    /// of Aep.PlatformServices.ModuleStatus.KnownModules -- a registry-only
+    /// edit can reuse an existing module, but wiring up a brand-new one
+    /// still needs a code change there. Distinct from ModuleUnreachable
+    /// (a known module whose Docker stack happens to be down right now):
+    /// this means the Command Center has no client for that address at
+    /// all, so a stub-looking card here would misleadingly suggest "not
+    /// built yet" when the real fix is a one-line addition to
+    /// KnownModules.cs, not a new backend feature.</summary>
+    public bool ModuleNotRegistered { get; init; }
+
+    public List<ActionDto> RelatedActions { get; init; } = [];
+
+    public string Title => Node.Title;
+
+    /// <summary>The node's launch buttons, primary first. Empty when the
+    /// registry entry has no "actions" array.</summary>
+    public IReadOnlyList<CommandCenterNodeAction> Actions =>
+        (Node.Actions ?? []).OrderByDescending(a => a.Primary).ToList();
+
+    public bool HasActions => Actions.Count > 0;
+
+    public bool HasContent => GovernanceProject is not null || SoftwareProject is not null
+                              || ModuleCard is not null || ModuleUnreachable || ModuleNotRegistered;
+
+    /// <summary>Nothing to show at all - no live content, no launch buttons,
+    /// and no children to drill into. Renders Node.StubText instead of an
+    /// empty card.</summary>
+    public bool IsStub => !HasContent && !HasChildren && !HasActions;
+}
+
+/// <summary>
+/// Backs MainWindow. Renders the Command Center's tree - see
+/// Aep.ModuleContracts.CommandCenterNode for the registry shape and
+/// command-center-registry.json for the actual tree data - confirmed
+/// 2026-08-25 (the "flatten the top, layer buttons as you move down"
+/// restructure). Only one level is ever visible at a time (the current
+/// node's children, or the root nodes); navigating in/out just changes
+/// which slice of the same registry is shown. Adding, renaming, or
+/// reshuffling a card is a registry edit, not a code change to this class.
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
@@ -24,26 +79,83 @@ public sealed class MainViewModel : ObservableObject
     // click Reload once the API's actually back.
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
 
+    private static readonly string RegistryPath =
+        Path.Combine(AppContext.BaseDirectory, "command-center-registry.json");
+
     private readonly GovernanceClient _governanceClient;
+
+    // One ModuleStatusClient per known domain app (Aep.PlatformServices.
+    // ModuleStatus.KnownModules) - built once here rather than passed in via
+    // the constructor, since there's no DI container in this app yet and
+    // every module currently uses the same no-arg construction.
+    private static readonly Uri[] ModuleBaseAddresses = [KnownModules.CollectorIntelligence, KnownModules.MyersWolinIp];
+    private readonly Dictionary<Uri, ModuleStatusClient> _moduleStatusClients =
+        ModuleBaseAddresses.ToDictionary(address => address, address => new ModuleStatusClient(address));
+
+    // Free-text Action.Area values don't always match a GovernanceProject's
+    // name exactly (e.g. "Myers Wolin AI" vs. "Myers Wolin IP Intelligence
+    // Platform") - this is a small, hand-maintained alias table for the ones
+    // that don't line up, same "small static registry, easy to edit" spirit
+    // as KnownModules. Exact (case-insensitive) matches never need an entry.
+    private static readonly Dictionary<string, string> AreaAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Myers Wolin AI"] = "Myers Wolin IP Intelligence Platform",
+        ["Lottery Intelligence"] = "Odds Market Intelligence Platform",
+    };
+
+    private static readonly Dictionary<string, (string Title, string Body)> HelpTopics = new()
+    {
+        ["overview"] = (
+            "AI Executive Platform - Command Center",
+            "This console is the daily starting point across all AI Executive Platform work.\n\n" +
+            "Dev Catch-Up opens a Claude Code session on all of C:\\Development, pre-filled to read " +
+            "the catch-up doc - use this for actual software work. Cowork Catch-Up opens a Claude " +
+            "Cowork session with both governance repos attached - use this for broader task/research " +
+            "work that doesn't need a shell. Reload refreshes everything below from source.\n\n" +
+            "Below that is the tree: Personal Finance, Myers Wolin, Odds Market Intelligence, " +
+            "General AI, and Other Areas are the top-level domains. Press any card with a 'View " +
+            "contents' button to drill into it - a breadcrumb and Back button appear once you're " +
+            "inside one. Cards show live status where it exists (green/amber/red = ok/attention/" +
+            "alert), and a plain 'not built yet' note where it doesn't. 'Go deeper' on a live card " +
+            "opens a Claude session pre-scoped to that exact topic."),
+    };
+
     private readonly DispatcherTimer _retryTimer;
     private bool _isLoading;
     private string _statusMessage = "Loading governance data...";
     private DateTimeOffset? _lastSuccessfulLoadAt;
 
-    // Statuses that mean "don't render this card" - e.g. a GovernanceProject
-    // row consolidated into another one by a governance cleanup (see
-    // scripts/sync_governance.py in collector-intelligence-engine) rather
-    // than deleted outright, so the history stays queryable via the API
-    // without cluttering the daily-use console with a duplicate/dead card.
+    // Statuses that mean "don't render this card's live content" - e.g. a
+    // GovernanceProject row consolidated into another one by a governance
+    // cleanup (see scripts/sync_governance.py in collector-intelligence-
+    // engine) rather than deleted outright, so the history stays queryable
+    // via the API without cluttering the daily-use console with a dead card.
     private static readonly string[] HiddenStatuses = ["Superseded", "Archived", "Retired"];
+
+    private List<CommandCenterNode> _registryNodes = [];
+    private ExecutiveBriefingDto? _latestBriefing;
+    private readonly Dictionary<string, ModuleStatusDto> _moduleStatusByBaseAddress = new();
+    private readonly HashSet<string> _unreachableModuleAddresses = new();
+
+    // Node ids from root to the currently open node - empty means "at the
+    // root", showing the top-level domains. Only single-step Back is wired
+    // up for now (not jump-to-any-breadcrumb-segment); BreadcrumbText still
+    // shows the full path for orientation.
+    private readonly List<string> _currentPath = [];
 
     public MainViewModel(GovernanceClient governanceClient)
     {
         _governanceClient = governanceClient;
         ReloadCommand = new RelayCommand(LoadAsync);
         DevCatchUpCommand = new RelayCommand(DevCatchUpAsync);
+        CoworkCatchUpCommand = new RelayCommand(CoworkCatchUpAsync);
         OpenProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-open.ps1", "Open"));
         DevelopProjectCommand = new RelayCommand<GovernanceProjectDto>(p => LaunchAsync(p, "launch-dev.ps1", "Develop"));
+        LaunchModuleCardCommand = new RelayCommand<ModuleStatusCardDto>(LaunchModuleCard);
+        LaunchNodeActionCommand = new RelayCommand<CommandCenterNodeAction>(LaunchNodeAction);
+        ShowHelpCommand = new RelayCommand<string>(ShowHelp);
+        SelectNodeCommand = new RelayCommand<CommandCenterNodeView>(SelectNode);
+        GoBackCommand = new RelayCommand(GoBack);
 
         _retryTimer = new DispatcherTimer { Interval = RetryInterval };
         _retryTimer.Tick += async (_, _) =>
@@ -55,10 +167,30 @@ public sealed class MainViewModel : ObservableObject
         };
     }
 
-    public ObservableCollection<GovernanceProjectDto> DomainApplications { get; } = [];
-    public ObservableCollection<GovernanceProjectDto> CommandCenterAreas { get; } = [];
-    public ObservableCollection<SoftwareProjectDto> SoftwareProjects { get; } = [];
-    public ObservableCollection<ActionDto> OpenActions { get; } = [];
+    public ObservableCollection<CommandCenterNodeView> VisibleNodes { get; } = [];
+
+    /// <summary>The node currently drilled into, if any - its own content (if
+    /// it has any) renders above its children. Null at the root.</summary>
+    public CommandCenterNodeView? CurrentNode
+    {
+        get => _currentNode;
+        private set => SetField(ref _currentNode, value);
+    }
+    private CommandCenterNodeView? _currentNode;
+
+    public string BreadcrumbText
+    {
+        get => _breadcrumbText;
+        private set => SetField(ref _breadcrumbText, value);
+    }
+    private string _breadcrumbText = "Home";
+
+    public bool CanGoBack
+    {
+        get => _canGoBack;
+        private set => SetField(ref _canGoBack, value);
+    }
+    private bool _canGoBack;
 
     public bool IsLoading
     {
@@ -74,23 +206,31 @@ public sealed class MainViewModel : ObservableObject
 
     public ICommand ReloadCommand { get; }
     public ICommand DevCatchUpCommand { get; }
+    public ICommand CoworkCatchUpCommand { get; }
     public ICommand OpenProjectCommand { get; }
     public ICommand DevelopProjectCommand { get; }
+    public ICommand LaunchModuleCardCommand { get; }
+    public ICommand LaunchNodeActionCommand { get; }
+    public ICommand ShowHelpCommand { get; }
+    public ICommand SelectNodeCommand { get; }
+    public ICommand GoBackCommand { get; }
 
     public async Task LoadAsync()
     {
         IsLoading = true;
         StatusMessage = "Loading governance data...";
+        ReloadRegistry();
+
         try
         {
             var briefing = await _governanceClient.GetBriefingAsync();
-            Populate(briefing);
+            _latestBriefing = briefing;
             _lastSuccessfulLoadAt = DateTimeOffset.Now;
             _retryTimer.Stop();
 
-            StatusMessage = $"Updated {DateTime.Now:t} - {DomainApplications.Count} domain application(s), " +
-                             $"{CommandCenterAreas.Count} command center area(s), {SoftwareProjects.Count} software " +
-                             $"project(s), {OpenActions.Count} open action(s).";
+            StatusMessage = $"Updated {DateTime.Now:t} - {briefing.GovernanceProjects.Count} governance " +
+                             $"project(s), {briefing.SoftwareProjects.Count} software project(s), " +
+                             $"{briefing.OpenActions.Count} open action(s).";
 
             // Fire-and-forget: caching is best-effort and must never delay or
             // fail a load that already succeeded (see BriefingCache).
@@ -103,10 +243,10 @@ public sealed class MainViewModel : ObservableObject
 
             if (_lastSuccessfulLoadAt is { } lastLoad)
             {
-                // Already showing real data from earlier this session (Populate
-                // is never called on failure, so it's still on screen) - just
-                // make clear it's aging, don't manufacture a scarier "nothing
-                // works" message than what's actually true.
+                // Already showing real data from earlier this session
+                // (_latestBriefing is only ever overwritten on success) -
+                // just make clear it's aging, don't manufacture a scarier
+                // "nothing works" message than what's actually true.
                 StatusMessage = $"{apiError} Still showing data as of {lastLoad:t}.";
             }
             else if (BriefingCache.TryLoad() is { } cached)
@@ -114,7 +254,7 @@ public sealed class MainViewModel : ObservableObject
                 // Cold start during an outage (e.g. Docker Desktop itself failing
                 // to start, 2026-08-18) - show the last known-good briefing
                 // instead of a blank console, clearly labeled as stale.
-                Populate(cached.Briefing);
+                _latestBriefing = cached.Briefing;
                 StatusMessage = $"{apiError} Showing cached data from {cached.FetchedAt:g} - may be out of date.";
             }
             else
@@ -126,44 +266,238 @@ public sealed class MainViewModel : ObservableObject
         }
         finally
         {
+            // Runs whether the governance fetch above succeeded or failed -
+            // module status is a separate feed with its own per-module
+            // failure handling, so a governance outage (e.g. collector-
+            // intelligence-engine's Docker stack down) never blocks Myers
+            // Wolin's module status from loading, and vice versa.
+            await LoadModuleStatusAsync();
+            RebuildVisibleNodes();
             IsLoading = false;
         }
     }
 
-    private void Populate(ExecutiveBriefingDto briefing)
+    /// <summary>
+    /// Re-reads command-center-registry.json from disk on every load, not
+    /// just at startup - so a hand-edit to the tree shape takes effect on
+    /// the next Reload press, no rebuild or restart needed. A broken or
+    /// missing file keeps whatever registry was already loaded (empty on
+    /// first run) rather than crashing the whole load.
+    /// </summary>
+    private void ReloadRegistry()
     {
-        DomainApplications.Clear();
-        CommandCenterAreas.Clear();
-        SoftwareProjects.Clear();
-        OpenActions.Clear();
-
-        foreach (var project in briefing.GovernanceProjects
-                     .Where(p => !HiddenStatuses.Contains(p.Status, StringComparer.OrdinalIgnoreCase))
-                     .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        try
         {
-            if (project.Tier == GovernanceTiers.DomainApplication)
+            _registryNodes = CommandCenterRegistryLoader.LoadFromFile(RegistryPath);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not load the Command Center registry ({ex.Message}).";
+        }
+    }
+
+    /// <summary>
+    /// Fetches every known module's GET /module-status independently - one
+    /// module being unreachable never blocks another's cards, and every leaf
+    /// pointed at that module renders as unreachable (see RebuildVisibleNodes)
+    /// rather than silently showing nothing. Fetched concurrently rather than
+    /// one at a time: each client has its own 10s timeout, so a sequential
+    /// loop would let N unreachable modules add up to N*10s of serial waiting
+    /// before the console can render anything. Task.WhenAll caps the total
+    /// wait at the slowest single module regardless of how many are down.
+    /// </summary>
+    private async Task LoadModuleStatusAsync()
+    {
+        _unreachableModuleAddresses.Clear();
+
+        var fetches = _moduleStatusClients.Select(async pair =>
+        {
+            var (address, client) = pair;
+            try
             {
-                DomainApplications.Add(project);
+                return (address, Status: (ModuleStatusDto?)await client.GetStatusAsync());
+            }
+            catch
+            {
+                return (address, Status: null);
+            }
+        });
+
+        foreach (var (address, status) in await Task.WhenAll(fetches))
+        {
+            if (status is not null)
+            {
+                _moduleStatusByBaseAddress[address.ToString()] = status;
             }
             else
             {
-                // Anything not explicitly tagged "Domain Application" - including
-                // an untagged/unclassified row - renders as a Command Center Area.
-                // That's the safer default: an unclassified row should still show
-                // up somewhere rather than silently vanish from the console.
-                CommandCenterAreas.Add(project);
+                _unreachableModuleAddresses.Add(address.ToString());
+            }
+        }
+    }
+
+    /// <summary>Rebuilds VisibleNodes (and CurrentNode/BreadcrumbText) for
+    /// whatever level of the tree _currentPath currently points at, using
+    /// whatever governance/module data is currently cached. Called after
+    /// every load and after every navigation.</summary>
+    private void RebuildVisibleNodes()
+    {
+        // A hand-edit to the registry between Reloads can delete a node we're
+        // currently drilled into (or one of its ancestors). Trim _currentPath
+        // back to its longest still-valid prefix rather than letting a lookup
+        // below throw - a reset to a higher level is a fine recovery, a crash
+        // isn't.
+        PruneCurrentPathToValid();
+
+        var parentId = _currentPath.Count > 0 ? _currentPath[^1] : null;
+
+        var parentNode = parentId is null
+            ? null
+            : _registryNodes.FirstOrDefault(n => n.Id == parentId);
+        CurrentNode = parentNode is null ? null : BuildNodeView(parentNode);
+
+        BreadcrumbText = _currentPath.Count == 0
+            ? "Home"
+            : "Home > " + string.Join(" > ", _currentPath.Select(id =>
+                _registryNodes.FirstOrDefault(n => n.Id == id)?.Title ?? id));
+
+        CanGoBack = _currentPath.Count > 0;
+
+        VisibleNodes.Clear();
+        foreach (var node in _registryNodes.Where(n => n.ParentId == parentId))
+        {
+            VisibleNodes.Add(BuildNodeView(node));
+        }
+    }
+
+    /// <summary>Drops any trailing segments of _currentPath that no longer
+    /// resolve to a real parent-linked chain in the current registry (a node
+    /// was renamed or removed by a hand-edit). Keeps the longest valid
+    /// prefix.</summary>
+    private void PruneCurrentPathToValid()
+    {
+        var valid = new List<string>();
+        string? expectedParentId = null;
+        foreach (var id in _currentPath)
+        {
+            var node = _registryNodes.FirstOrDefault(n => n.Id == id);
+            if (node is null || node.ParentId != expectedParentId)
+            {
+                break;
+            }
+            valid.Add(id);
+            expectedParentId = id;
+        }
+
+        if (valid.Count != _currentPath.Count)
+        {
+            _currentPath.Clear();
+            _currentPath.AddRange(valid);
+        }
+    }
+
+    private CommandCenterNodeView BuildNodeView(CommandCenterNode node)
+    {
+        var hasChildren = _registryNodes.Any(n => n.ParentId == node.Id);
+
+        GovernanceProjectDto? governanceProject = null;
+        if (node.GovernanceProjectName is not null)
+        {
+            governanceProject = _latestBriefing?.GovernanceProjects.FirstOrDefault(p =>
+                p.Name == node.GovernanceProjectName
+                && !HiddenStatuses.Contains(p.Status, StringComparer.OrdinalIgnoreCase));
+        }
+
+        SoftwareProjectDto? softwareProject = null;
+        if (node.SoftwareProjectName is not null)
+        {
+            softwareProject = _latestBriefing?.SoftwareProjects
+                .FirstOrDefault(p => p.Name == node.SoftwareProjectName);
+        }
+
+        ModuleStatusCardDto? moduleCard = null;
+        var moduleUnreachable = false;
+        var moduleNotRegistered = false;
+        if (node.ModuleBaseAddressUri is not null)
+        {
+            var key = node.ModuleBaseAddressUri.ToString();
+            if (!_moduleStatusClients.ContainsKey(node.ModuleBaseAddressUri))
+            {
+                // A syntactically valid address the registry loader accepted,
+                // but no ModuleStatusClient exists for it - adding a new
+                // domain app's address to a registry node needs a matching
+                // entry in KnownModules.cs, not just the JSON edit.
+                moduleNotRegistered = true;
+            }
+            else if (_unreachableModuleAddresses.Contains(key))
+            {
+                moduleUnreachable = true;
+            }
+            else if (node.ModuleCardId is not null
+                     && _moduleStatusByBaseAddress.TryGetValue(key, out var status))
+            {
+                moduleCard = status.Cards.FirstOrDefault(c => c.Id == node.ModuleCardId);
             }
         }
 
-        foreach (var project in briefing.SoftwareProjects.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        var relatedActions = _latestBriefing?.OpenActions
+            .Where(a => AreaMatchesGovernanceProject(a.Area, node.GovernanceProjectName))
+            .ToList() ?? [];
+
+        return new CommandCenterNodeView
         {
-            SoftwareProjects.Add(project);
+            Node = node,
+            HasChildren = hasChildren,
+            GovernanceProject = governanceProject,
+            SoftwareProject = softwareProject,
+            ModuleCard = moduleCard,
+            ModuleUnreachable = moduleUnreachable,
+            ModuleNotRegistered = moduleNotRegistered,
+            RelatedActions = relatedActions,
+        };
+    }
+
+    private static bool AreaMatchesGovernanceProject(string? area, string? governanceProjectName)
+    {
+        if (area is null || governanceProjectName is null)
+        {
+            return false;
         }
 
-        foreach (var action in briefing.OpenActions)
+        if (string.Equals(area, governanceProjectName, StringComparison.OrdinalIgnoreCase))
         {
-            OpenActions.Add(action);
+            return true;
         }
+
+        return AreaAliases.TryGetValue(area, out var aliased)
+               && string.Equals(aliased, governanceProjectName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Backs SelectNodeCommand - drills into a node's children when
+    /// its "View contents" button is pressed. No-op for a node with nothing
+    /// underneath it (the button isn't shown in that case anyway).</summary>
+    private Task SelectNode(CommandCenterNodeView nodeView)
+    {
+        if (nodeView.HasChildren)
+        {
+            _currentPath.Add(nodeView.Node.Id);
+            RebuildVisibleNodes();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Backs GoBackCommand - steps back up one level. A no-op at the
+    /// root (CanGoBack is false there, so the button is disabled anyway).</summary>
+    private Task GoBack()
+    {
+        if (_currentPath.Count > 0)
+        {
+            _currentPath.RemoveAt(_currentPath.Count - 1);
+            RebuildVisibleNodes();
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -197,50 +531,235 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Reciprocal to DevCatchUpAsync: opens a new Claude Cowork session (not
+    /// Code) via the same claude:// deep-link mechanism, pre-filled to run the
+    /// brian-catchup skill with both governance-doc repos attached. Code
+    /// sessions have real shell access for git/docker/build state but no path
+    /// back into Cowork's skill layer - this button closes that asymmetry.
+    /// </summary>
+    public Task CoworkCatchUpAsync()
+    {
+        const string url = "claude://cowork/new?q=Run%20the%20brian-catchup%20skill%20and%20catch%20me%20up." +
+                            "&folder=C%3A%5CDevelopment%5Ccollector-intelligence-engine" +
+                            "&folder=C%3A%5CDevelopment%5Cai-executive-platform";
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            StatusMessage = "Opening a Claude Cowork session with both repos attached - the catch-up prompt " +
+                             "will be pre-filled in the new window, but you need to press Enter there to send " +
+                             "it (Claude Desktop deep links never auto-send, by design).";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not open Claude Desktop ({ex.Message}). Is it installed?";
+        }
+
+        return Task.CompletedTask;
+    }
+
+    // Upper bound on how long we'll narrate a launch before handing it off to
+    // the background. The launch scripts' own Wait-DockerReady caps at 120s; on
+    // a cold Docker Desktop start that plus compose plus opening a Claude
+    // session can run past two minutes, so give it real headroom. Hitting this
+    // never kills the script - it just stops the play-by-play.
+    private static readonly TimeSpan LaunchNarrationTimeout = TimeSpan.FromSeconds(240);
+
+    /// <summary>
     /// Backs both OpenProjectCommand and DevelopProjectCommand. Each
     /// project's own repo owns its launch logic (launch-open.ps1 /
     /// launch-dev.ps1 at the repo root) rather than this shell duplicating
     /// docker/npm/claude-deep-link details per project - this method just
     /// finds and runs the right script. A project with no RepoPath (most
-    /// Command Center Areas - button + status only, no dedicated repo) has
-    /// nothing to launch, which is expected, not an error.
+    /// areas - button + status only, no dedicated repo) has nothing to
+    /// launch, which is expected, not an error.
+    ///
+    /// The script is run with its output captured and streamed line-by-line
+    /// into StatusMessage - Wait-DockerReady on a cold start is a 30-120s
+    /// wait with nothing else to look at, so "Waiting for Docker Desktop's
+    /// engine to be ready..." showing up in the status bar is the difference
+    /// between "working" and "hung". On a clean exit we Reload so the module
+    /// card flips from "unreachable" to live on its own.
     /// </summary>
-    private Task LaunchAsync(GovernanceProjectDto project, string scriptName, string actionLabel)
+    private async Task LaunchAsync(GovernanceProjectDto project, string scriptName, string actionLabel)
     {
         if (!project.HasRepoPath)
         {
             StatusMessage = $"{project.Name} has no repo linked - nothing to {actionLabel.ToLowerInvariant()}.";
-            return Task.CompletedTask;
+            return;
         }
 
         var scriptPath = Path.Combine(project.RepoPath!, scriptName);
         if (!File.Exists(scriptPath))
         {
             StatusMessage = $"{actionLabel} script not found for {project.Name}: {scriptPath}";
+            return;
+        }
+
+        var verb = actionLabel.ToLowerInvariant();
+        StatusMessage = $"{actionLabel}ing {project.Name} - starting Docker and the API " +
+                         "(a cold start can take a minute or two)...";
+
+        var psi = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = project.RepoPath!,
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-File");
+        psi.ArgumentList.Add(scriptPath);
+
+        using var narrationTimeout = new CancellationTokenSource(LaunchNarrationTimeout);
+        string? lastLine = null;
+
+        try
+        {
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+
+            // Drain stderr concurrently so a chatty script can't wedge on a
+            // full pipe; the script surfaces its own hard failures via a
+            // MessageBox and a non-zero exit, so stderr here is just detail.
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            while (true)
+            {
+                string? line;
+                try
+                {
+                    line = await process.StandardOutput.ReadLineAsync(narrationTimeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                if (line is null)
+                {
+                    break;
+                }
+
+                line = line.Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                lastLine = line;
+                // ReadLineAsync resumed us on the UI thread (WPF sync context),
+                // so touching StatusMessage here needs no marshalling.
+                StatusMessage = $"{actionLabel}ing {project.Name}: {line}";
+            }
+
+            if (narrationTimeout.IsCancellationRequested)
+            {
+                // Observe stderr so the abandoned Task doesn't fault unheard.
+                _ = stderrTask.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
+                StatusMessage = $"{actionLabel} for {project.Name} is still working after " +
+                                 $"{(int)LaunchNarrationTimeout.TotalSeconds / 60} min - check Docker " +
+                                 "Desktop's tray icon. It keeps running in the background; press Reload " +
+                                 "once its card goes live.";
+                return;
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None);
+            var stderr = (await stderrTask).Trim();
+
+            if (process.ExitCode != 0)
+            {
+                var detail = !string.IsNullOrEmpty(stderr) ? stderr
+                    : lastLine ?? $"exit code {process.ExitCode}";
+                StatusMessage = $"{actionLabel} for {project.Name} failed: {detail}";
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not {verb} {project.Name}: {ex.Message}";
+            return;
+        }
+
+        StatusMessage = $"{actionLabel} for {project.Name} is up - refreshing status...";
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// Backs LaunchModuleCardCommand, the "Go deeper" button on every module
+    /// status card. Prefers WebUrl when a card offers one (the Market Outlook
+    /// page and similar are deferred but this keeps the door open); falls
+    /// back to ClaudeDeepLink; a card with neither just reports it has
+    /// nothing to open rather than the button silently doing nothing.
+    /// </summary>
+    private Task LaunchModuleCard(ModuleStatusCardDto card)
+    {
+        var url = !string.IsNullOrWhiteSpace(card.WebUrl) ? card.WebUrl : card.ClaudeDeepLink;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            StatusMessage = $"'{card.Title}' has no link to open.";
             return Task.CompletedTask;
         }
 
         try
         {
-            var psi = new ProcessStartInfo("powershell.exe")
-            {
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-            };
-            psi.ArgumentList.Add("-NoProfile");
-            psi.ArgumentList.Add("-ExecutionPolicy");
-            psi.ArgumentList.Add("Bypass");
-            psi.ArgumentList.Add("-File");
-            psi.ArgumentList.Add(scriptPath);
-            Process.Start(psi);
-
-            StatusMessage = $"{actionLabel}ing {project.Name}... " +
-                             "(the launch script may pop its own window - e.g. a dev server terminal " +
-                             "or a Claude Code session - give it a few seconds)";
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            StatusMessage = url.StartsWith("claude://", StringComparison.Ordinal)
+                ? $"Opening a Claude session for '{card.Title}' - press Enter in the new window to send " +
+                  "the pre-filled prompt (Claude Desktop deep links never auto-send, by design)."
+                : $"Opening '{card.Title}' in your browser.";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Could not {actionLabel.ToLowerInvariant()} {project.Name}: {ex.Message}";
+            StatusMessage = $"Could not open the link for '{card.Title}' ({ex.Message}).";
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Backs LaunchNodeActionCommand - a node's own launch buttons (the
+    /// registry "actions" array). Same Process.Start mechanism as
+    /// LaunchModuleCard's "Go deeper"; a node action is always a claude://
+    /// deep link today, but nothing here assumes that.
+    /// </summary>
+    private Task LaunchNodeAction(CommandCenterNodeAction action)
+    {
+        if (string.IsNullOrWhiteSpace(action.DeepLink))
+        {
+            StatusMessage = $"'{action.Label}' has no link to open.";
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(action.DeepLink) { UseShellExecute = true });
+            StatusMessage = action.DeepLink.StartsWith("claude://", StringComparison.Ordinal)
+                ? $"Opening a Claude session for '{action.Label}' - press Enter in the new window " +
+                  "to send the pre-filled prompt (Claude Desktop deep links never auto-send, by design)."
+                : $"Opening '{action.Label}'.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not open '{action.Label}' ({ex.Message}).";
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Backs ShowHelpCommand - the '?' button next to the header. Deliberately
+    /// a plain MessageBox rather than a custom dialog: this app has no dialog
+    /// infrastructure yet and the help content is static text, so a MessageBox
+    /// is the simplest thing that actually works. See HelpTopics for content.
+    /// </summary>
+    private Task ShowHelp(string topic)
+    {
+        if (HelpTopics.TryGetValue(topic, out var help))
+        {
+            MessageBox.Show(help.Body, help.Title, MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         return Task.CompletedTask;
