@@ -30,7 +30,14 @@
     "module_base_address": "http://localhost:8000/",
     "module_card_id": "market-outlook",
     "stub_text": null,
-    "stub_deep_link": null
+    "stub_deep_link": null,
+    "actions": [
+      {
+        "primary": true,
+        "label": "Gold & silver outlook: 3, 6, 12 months",
+        "deep_link": "http://localhost:8000/market-research/odds/report"
+      }
+    ]
   },
   {
     "id": "tax",
