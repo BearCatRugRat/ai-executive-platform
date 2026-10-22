@@ -19,7 +19,18 @@
     "module_base_address": "http://localhost:8000/",
     "module_card_id": "quality-flags",
     "stub_text": null,
-    "stub_deep_link": null
+    "stub_deep_link": null,
+    "actions": [
+      {
+        "primary": true,
+        "label": "Auction buying aid",
+        "deep_link": "http://localhost:8000/buying-aid/report"
+      },
+      {
+        "label": "Collection summary",
+        "deep_link": "http://localhost:8000/collection-summary/report"
+      }
+    ]
   },
   {
     "id": "bullion-market-analysis",
