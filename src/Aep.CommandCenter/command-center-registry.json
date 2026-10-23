@@ -17,7 +17,7 @@
     "governance_project_name": "Coins and Bullion",
     "software_project_name": null,
     "module_base_address": "http://localhost:8000/",
-    "module_card_id": "quality-flags",
+    "module_card_id": "collection",
     "stub_text": null,
     "stub_deep_link": null,
     "actions": [
@@ -27,8 +27,8 @@
         "deep_link": "http://localhost:8000/buying-aid/report"
       },
       {
-        "label": "Collection summary",
-        "deep_link": "http://localhost:8000/collection-summary/report"
+        "label": "Open the app",
+        "deep_link": "http://localhost:5173/"
       }
     ]
   },
